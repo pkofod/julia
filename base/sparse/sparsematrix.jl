@@ -2910,6 +2910,36 @@ function blkdiag(X::SparseMatrixCSC...)
     SparseMatrixCSC(m, n, colptr, rowval, nzval)
 end
 
+# Sparse/dense concatenation
+
+function hcat(X::Union{Matrix, SparseMatrixCSC}...)
+    S = issparse(X[1]) ? X[1] : sparse(X[1])
+    for x in X[2:end]
+        S = hcat(S,  issparse(x) ? x : sparse(x))
+    end
+    S
+end
+
+function vcat(X::Union{Matrix, SparseMatrixCSC}...)
+    S = issparse(X[1]) ? X[1] : sparse(X[1])
+    for x in X[2:end]
+        S = vcat(S, issparse(x) ? x : sparse(x))
+    end
+    S
+end
+
+function hvcat(rows::Tuple{Vararg{Int}}, X::Union{Matrix, SparseMatrixCSC}...)
+    nbr = length(rows)  # number of block rows
+
+    tmp_rows = Array(SparseMatrixCSC, nbr)
+    k = 0
+    @inbounds for i = 1 : nbr
+        tmp_rows[i] = typeof(X[(1 : rows[i]) + k]) <: Tuple{Vararg{Matrix}} ? sparse(hcat(X[(1 : rows[i]) + k]...)) : hcat(X[(1 : rows[i]) + k]...)
+        k += rows[i]
+    end
+    vcat(tmp_rows...)
+end
+
 ## Structure query functions
 issymmetric(A::SparseMatrixCSC) = is_hermsym(A, IdFun())
 
