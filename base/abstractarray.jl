@@ -685,6 +685,8 @@ end
 
 hcat(A::AbstractVecOrMat...) = typed_hcat(promote_eltype(A...), A...)
 hcat{T}(A::AbstractVecOrMat{T}...) = typed_hcat(T, A...)
+hcat(A::Matrix...) = typed_hcat(promote_eltype(A...), A...)
+hcat{T}(A::Matrix{T}...) = typed_hcat(T, A...)
 
 function typed_hcat(T::Type, A::AbstractVecOrMat...)
     nargs = length(A)
@@ -722,6 +724,8 @@ end
 
 vcat(A::AbstractMatrix...) = typed_vcat(promote_eltype(A...), A...)
 vcat{T}(A::AbstractMatrix{T}...) = typed_vcat(T, A...)
+vcat(A::Matrix...) = typed_vcat(promote_eltype(A...), A...)
+vcat{T}(A::Matrix{T}...) = typed_vcat(T, A...)
 
 function typed_vcat(T::Type, A::AbstractMatrix...)
     nargs = length(A)
@@ -898,6 +902,9 @@ function hvcat{T<:Number}(rows::Tuple{Vararg{Int}}, xs::T...)
     end
     a
 end
+
+hvcat(rows::Tuple{Vararg{Int}}, xs::Matrix...) = typed_hvcat(promote_eltype(xs...), rows, xs...)
+hvcat{T}(rows::Tuple{Vararg{Int}}, xs::Matrix{T}...) = typed_hvcat(T, rows, xs...)
 
 function hvcat_fill(a, xs)
     k = 1

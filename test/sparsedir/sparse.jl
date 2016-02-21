@@ -1227,3 +1227,13 @@ end
 # https://groups.google.com/forum/#!topic/julia-dev/QT7qpIpgOaA
 @test sparse([1,1], [1,1], [true, true]) == sparse([1,1], [1,1], [true, true], 1, 1) == fill(true, 1, 1)
 @test sparsevec([1,1], [true, true]) == sparsevec([1,1], [true, true], 1) == fill(true, 1)
+
+# dense sparse concatenation -> sparse return type
+@test issparse([sprand(10,10,.1) rand(10,10)])
+@test issparse([sprand(10,10,.1); rand(10,10)])
+@test issparse([sprand(10,10,.1) rand(10,10); rand(10,10) rand(10,10)])
+#@test issparse([sprand(10,10,.1) rand(10)])
+#@test issparse([sprand(10,10,.1) sprand(10,.1)])
+@test !issparse([rand(10,10)  rand(10,10)])
+@test !issparse([rand(10,10); rand(10,10)])
+@test !issparse([rand(10,10)  rand(10,10); rand(10,10) rand(10,10)])
