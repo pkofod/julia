@@ -2631,7 +2631,7 @@ function hvcat(rows::Tuple{Vararg{Int}}, X::Union{Matrix, SparseMatrixCSC}...)
     tmp_rows = Array(SparseMatrixCSC, nbr)
     k = 0
     @inbounds for i = 1 : nbr
-        tmp_rows[i] = typeof(X[(1 : rows[i]) + k]) <: Tuple{Vararg{Matrix}} ? sparse(hcat(X[(1 : rows[i]) + k]...)) : hcat(X[(1 : rows[i]) + k]...) 
+        tmp_rows[i] = typeof(X[(1 : rows[i]) + k]) <: Tuple{Vararg{Matrix}} ? sparse(hcat(X[(1 : rows[i]) + k]...)) : hcat(X[(1 : rows[i]) + k]...)
         k += rows[i]
     end
     vcat(tmp_rows...)
