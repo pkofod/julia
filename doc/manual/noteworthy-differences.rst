@@ -228,7 +228,7 @@ Noteworthy differences from Python
 - In Julia, a vector of vectors can automatically concatenate into a
   one-dimensional vector *if* no explicit element type is specified. For example:
 
-  - In Julia, ``[1, [2, 3]]`` concatenates into ``[1, 2, 3]``, like in R.
+  - In Julia, ``[1, [2, 3]]`` is invalid syntax, and ``[1; [2, 3]`` concatenates into ``[1, 2, 3]``
   - In Julia, ``Int[1, Int[2, 3]]`` will *not* concatenate, but instead throw an error.
   - In Julia, ``Any[1, [2,3]]`` will *not* concatenate.
   - In Julia, ``Vector{Int}[[1, 2], [3, 4]]`` will *not* concatenate, but
