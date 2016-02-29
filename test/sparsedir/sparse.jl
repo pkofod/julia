@@ -1282,3 +1282,16 @@ let
     @test issparse(UpperTriangular(full(m))) == false
     @test issparse(LinAlg.UnitUpperTriangular(full(m))) == false
 end
+
+# dense sparse concatenation -> sparse return type
+@test issparse([sprand(10,10,.1) rand(10,10)])
+@test issparse([sprand(10,10,.1); rand(10,10)])
+@test issparse([sprand(10,10,.1) rand(10,10); rand(10,10) rand(10,10)])
+#---
+# Matrix vector cat not supported for sparse #13130
+#@test issparse([sprand(10,10,.1) rand(10)])
+#@test issparse([sprand(10,10,.1) sprand(10,.1)])
+# ---
+@test !issparse([rand(10,10)  rand(10,10)])
+@test !issparse([rand(10,10); rand(10,10)])
+@test !issparse([rand(10,10)  rand(10,10); rand(10,10) rand(10,10)])
