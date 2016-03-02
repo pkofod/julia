@@ -94,6 +94,8 @@ Library improvements
     * All `sparse` methods now retain provided numerical zeros as structural nonzeros; to
       drop numerical zeros, use `dropzeros!` ([#14798],[#15242]).
 
+    * Concatenating dense and sparse matrices now returns a sparse matrix ([#15172]).
+
   * New `foreach` function for calling a function on every element of a collection when
     the results are not needed.
 
@@ -1791,4 +1793,6 @@ Too numerous to mention.
 [#14469]: https://github.com/JuliaLang/julia/issues/14469
 [#14759]: https://github.com/JuliaLang/julia/issues/14759
 [#14798]: https://github.com/JuliaLang/julia/issues/14798
+[#15172]: https://github.com/JuliaLang/julia/issues/15172
+[#15192]: https://github.com/JuliaLang/julia/issues/15192
 [#15242]: https://github.com/JuliaLang/julia/issues/15242
