@@ -138,6 +138,8 @@ Library improvements
 
   * The new `Base.StackTraces` module makes stack traces easier to use programmatically. ([#14469])
 
+  * Concatenating dense and sparse matrices now returns a sparse matrix ([#15172]).
+
 Deprecated or removed
 ---------------------
 
@@ -198,3 +200,4 @@ Deprecated or removed
 [#15550]: https://github.com/JuliaLang/julia/issues/15550
 [#15609]: https://github.com/JuliaLang/julia/issues/15609
 [#15763]: https://github.com/JuliaLang/julia/issues/15763
+[#15172]: https://github.com/JuliaLang/julia/issues/15172
