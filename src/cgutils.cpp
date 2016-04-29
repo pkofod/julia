@@ -54,7 +54,7 @@ static Value *stringConstPtr(const std::string &txt)
                                     ArrayType::get(T_int8, pooledtxt.size()),
                                     true,
                                     GlobalVariable::PrivateLinkage,
-                                    ConstantDataArray::get(getGlobalContext(),
+                                    ConstantDataArray::get(jl_LLVMContext,
                                                            ArrayRef<unsigned char>(
                                                            (const unsigned char*)pooledtxt.data(),
                                                            pooledtxt.size())),
@@ -573,14 +573,14 @@ static void emit_error(const std::string &txt, jl_codectx_t *ctx)
 {
     just_emit_error(txt, ctx);
     builder.CreateUnreachable();
-    BasicBlock *cont = BasicBlock::Create(getGlobalContext(),"after_error",ctx->f);
+    BasicBlock *cont = BasicBlock::Create(jl_LLVMContext,"after_error",ctx->f);
     builder.SetInsertPoint(cont);
 }
 
 static void error_unless(Value *cond, const std::string &msg, jl_codectx_t *ctx)
 {
-    BasicBlock *failBB = BasicBlock::Create(getGlobalContext(),"fail",ctx->f);
-    BasicBlock *passBB = BasicBlock::Create(getGlobalContext(),"pass");
+    BasicBlock *failBB = BasicBlock::Create(jl_LLVMContext,"fail",ctx->f);
+    BasicBlock *passBB = BasicBlock::Create(jl_LLVMContext,"pass");
     builder.CreateCondBr(cond, passBB, failBB);
     builder.SetInsertPoint(failBB);
     just_emit_error(msg, ctx);
@@ -591,8 +591,8 @@ static void error_unless(Value *cond, const std::string &msg, jl_codectx_t *ctx)
 
 static void raise_exception_unless(Value *cond, Value *exc, jl_codectx_t *ctx)
 {
-    BasicBlock *failBB = BasicBlock::Create(getGlobalContext(),"fail",ctx->f);
-    BasicBlock *passBB = BasicBlock::Create(getGlobalContext(),"pass");
+    BasicBlock *failBB = BasicBlock::Create(jl_LLVMContext,"fail",ctx->f);
+    BasicBlock *passBB = BasicBlock::Create(jl_LLVMContext,"pass");
     builder.CreateCondBr(cond, passBB, failBB);
     builder.SetInsertPoint(failBB);
 #ifdef LLVM37
@@ -664,8 +664,8 @@ static void emit_typecheck(const jl_cgval_t &x, jl_value_t *type, const std::str
     else {
         istype = builder.CreateICmpEQ(emit_typeof_boxed(x,ctx), literal_pointer_val(type));
     }
-    BasicBlock *failBB = BasicBlock::Create(getGlobalContext(),"fail",ctx->f);
-    BasicBlock *passBB = BasicBlock::Create(getGlobalContext(),"pass");
+    BasicBlock *failBB = BasicBlock::Create(jl_LLVMContext,"fail",ctx->f);
+    BasicBlock *passBB = BasicBlock::Create(jl_LLVMContext,"pass");
     builder.CreateCondBr(istype, passBB, failBB);
     builder.SetInsertPoint(failBB);
 
@@ -699,8 +699,8 @@ static Value *emit_bounds_check(const jl_cgval_t &ainfo, jl_value_t *ty, Value *
          jl_options.check_bounds != JL_OPTIONS_CHECK_BOUNDS_OFF) ||
          jl_options.check_bounds == JL_OPTIONS_CHECK_BOUNDS_ON) {
         Value *ok = builder.CreateICmpULT(im1, len);
-        BasicBlock *failBB = BasicBlock::Create(getGlobalContext(),"fail",ctx->f);
-        BasicBlock *passBB = BasicBlock::Create(getGlobalContext(),"pass");
+        BasicBlock *failBB = BasicBlock::Create(jl_LLVMContext,"fail",ctx->f);
+        BasicBlock *passBB = BasicBlock::Create(jl_LLVMContext,"pass");
         builder.CreateCondBr(ok, passBB, failBB);
         builder.SetInsertPoint(failBB);
         if (!ty) { // jl_value_t** tuple (e.g. the vararg)
@@ -857,8 +857,14 @@ static jl_value_t *expr_type(jl_value_t *e, jl_codectx_t *ctx)
         jl_array_t *gensym_types = (jl_array_t*)ctx->linfo->gensymtypes;
         return jl_cellref(gensym_types, idx);
     }
-    if (jl_typeis(e, jl_slot_type)) {
-        jl_value_t *typ = jl_slot_get_type(e);
+    if (jl_typeis(e, jl_slotnumber_type)) {
+        jl_array_t *slot_types = (jl_array_t*)ctx->linfo->slottypes;
+        if (!jl_is_array(slot_types))
+            return (jl_value_t*)jl_any_type;
+        return jl_cellref(slot_types, jl_slot_number(e)-1);
+    }
+    if (jl_typeis(e, jl_typedslot_type)) {
+        jl_value_t *typ = jl_typedslot_get_type(e);
         if (jl_is_typevar(typ))
             typ = ((jl_tvar_t*)typ)->ub;
         return typ;
@@ -1206,8 +1212,8 @@ static Value *emit_array_nd_index(const jl_cgval_t &ainfo, jl_value_t *ex, size_
         jl_options.check_bounds == JL_OPTIONS_CHECK_BOUNDS_ON;
     BasicBlock *failBB=NULL, *endBB=NULL;
     if (bc) {
-        failBB = BasicBlock::Create(getGlobalContext(), "oob");
-        endBB = BasicBlock::Create(getGlobalContext(), "idxend");
+        failBB = BasicBlock::Create(jl_LLVMContext, "oob");
+        endBB = BasicBlock::Create(jl_LLVMContext, "idxend");
     }
 #endif
     Value **idxs = (Value**)alloca(sizeof(Value*)*nidxs);
@@ -1222,7 +1228,7 @@ static Value *emit_array_nd_index(const jl_cgval_t &ainfo, jl_value_t *ex, size_
                 k >= nd ? ConstantInt::get(T_size, 1) : emit_arraysize(ainfo, ex, k+1, ctx);
 #if CHECK_BOUNDS==1
             if (bc) {
-                BasicBlock *okBB = BasicBlock::Create(getGlobalContext(), "ib");
+                BasicBlock *okBB = BasicBlock::Create(jl_LLVMContext, "ib");
                 // if !(i < d) goto error
                 builder.CreateCondBr(builder.CreateICmpULT(ii, d), okBB, failBB);
                 ctx->f->getBasicBlockList().push_back(okBB);
@@ -1447,8 +1453,8 @@ static void emit_cpointercheck(const jl_cgval_t &x, const std::string &msg, jl_c
     Value *istype =
         builder.CreateICmpEQ(emit_nthptr(t, (ssize_t)(offsetof(jl_datatype_t,name)/sizeof(char*)), tbaa_datatype),
                              literal_pointer_val((jl_value_t*)jl_pointer_type->name));
-    BasicBlock *failBB = BasicBlock::Create(getGlobalContext(),"fail",ctx->f);
-    BasicBlock *passBB = BasicBlock::Create(getGlobalContext(),"pass");
+    BasicBlock *failBB = BasicBlock::Create(jl_LLVMContext,"fail",ctx->f);
+    BasicBlock *passBB = BasicBlock::Create(jl_LLVMContext,"pass");
     builder.CreateCondBr(istype, passBB, failBB);
     builder.SetInsertPoint(failBB);
 
@@ -1496,9 +1502,9 @@ static void emit_write_barrier(jl_codectx_t *ctx, Value *parent, Value *ptr)
     //builder.CreateCall(expect_func, {parent_marked, ConstantInt::get(T_int1, 0)});
     Value *parent_marked = builder.CreateICmpEQ(parent_mark_bits, ConstantInt::get(T_size, 1));
 
-    BasicBlock *cont = BasicBlock::Create(getGlobalContext(), "cont");
-    BasicBlock *barrier_may_trigger = BasicBlock::Create(getGlobalContext(), "wb_may_trigger", ctx->f);
-    BasicBlock *barrier_trigger = BasicBlock::Create(getGlobalContext(), "wb_trigger", ctx->f);
+    BasicBlock *cont = BasicBlock::Create(jl_LLVMContext, "cont");
+    BasicBlock *barrier_may_trigger = BasicBlock::Create(jl_LLVMContext, "wb_may_trigger", ctx->f);
+    BasicBlock *barrier_trigger = BasicBlock::Create(jl_LLVMContext, "wb_trigger", ctx->f);
     builder.CreateCondBr(parent_marked, barrier_may_trigger, cont);
 
     builder.SetInsertPoint(barrier_may_trigger);
@@ -1516,8 +1522,8 @@ static void emit_checked_write_barrier(jl_codectx_t *ctx, Value *parent, Value *
 {
     BasicBlock *cont;
     Value *not_null = builder.CreateICmpNE(ptr, V_null);
-    BasicBlock *if_not_null = BasicBlock::Create(getGlobalContext(), "wb_not_null", ctx->f);
-    cont = BasicBlock::Create(getGlobalContext(), "cont");
+    BasicBlock *if_not_null = BasicBlock::Create(jl_LLVMContext, "wb_not_null", ctx->f);
+    cont = BasicBlock::Create(jl_LLVMContext, "cont");
     builder.CreateCondBr(not_null, if_not_null, cont);
     builder.SetInsertPoint(if_not_null);
     emit_write_barrier(ctx, parent, ptr);
@@ -1558,7 +1564,7 @@ static void emit_setfield(jl_datatype_t *sty, const jl_cgval_t &strct, size_t id
 
 static bool might_need_root(jl_value_t *ex)
 {
-    return (!jl_is_symbol(ex) && !jl_typeis(ex, jl_slot_type) && !jl_is_gensym(ex) &&
+    return (!jl_is_symbol(ex) && !jl_is_slot(ex) && !jl_is_gensym(ex) &&
             !jl_is_bool(ex) && !jl_is_quotenode(ex) && !jl_is_byte_string(ex) &&
             !jl_is_globalref(ex));
 }

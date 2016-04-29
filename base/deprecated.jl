@@ -985,7 +985,6 @@ export call
 # 1933
 @deprecate_binding SingleAsyncWork AsyncCondition
 
-
 # #12872
 @deprecate istext istextmime
 
@@ -1070,6 +1069,14 @@ end
 @deprecate specialized_bitwise_unary(f::Function) f
 @deprecate specialized_bitwise_binary(f::Function) f
 
+@deprecate bitunpack(B::BitArray) Array(B)
+@deprecate bitpack(A::AbstractArray) BitArray(A)
+
+# #4163
+@deprecate xdump dump
+
+@deprecate copy(x::AbstractString)  identity(x)
+@deprecate copy(x::Tuple)  identity(x)
 
 # During the 0.5 development cycle, do not add any deprecations below this line
 # To be deprecated in 0.6
