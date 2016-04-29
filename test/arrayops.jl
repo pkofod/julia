@@ -131,7 +131,6 @@ a = reshape(1:20, 5, 4)
 for idx in ((3,), (2,2), (Base.ReshapedIndex(1),))
     try
         a[idx...] = 7
-        error("wrong error")
     catch err
         @test err.msg == "indexed assignment fails for a reshaped range; consider calling collect"
     end
