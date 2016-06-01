@@ -24,6 +24,8 @@ end
 SparseVector{Tv,Ti}(n::Integer, nzind::Vector{Ti}, nzval::Vector{Tv}) =
     SparseVector{Tv,Ti}(n, nzind, nzval)
 
+SparseMatrixCSC{Tv, Ti}(v::SparseVector{Tv, Ti}) = SparseMatrixCSC{Tv, Ti}(v.n, 1, Ti[1, length(v.nzind)+1], v.nzind, v.nzval)
+
 ### Basic properties
 
 length(x::SparseVector) = x.n
@@ -754,6 +756,10 @@ function vcat{Tv,Ti}(X::AbstractSparseVector{Tv,Ti}...)
     end
     SparseVector(len, rnzind, rnzval)
 end
+
+hcat(Xin::Union{SparseVector, SparseMatrixCSC}...) = hcat(map(SparseMatrixCSC, Xin)...)
+
+vcat(Xin::Union{SparseVector, SparseMatrixCSC}...) = vcat(map(SparseMatrixCSC, Xin)...)
 
 ### math functions
 
