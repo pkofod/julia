@@ -614,3 +614,15 @@ end
 @testset "promote Float16 irrational #15359" begin
     @test typeof(Float16(.5) * pi) == Float16
 end
+
+@testset "rem_pio2_kernel"
+    # test worst case
+    setprecision(BigFloat, 4096)
+    x = 6381956970095103.0 * 2.0^797
+    a = rem(big(x), big(pi)/2, RoundNearest)
+
+    n, y1, y2 = Base.Math.rem_pio2_kernel(x)
+    @test_approx a ≈ y1+y2
+
+    # add more tests
+end
