@@ -244,7 +244,7 @@ asinh(x::Number)
 Accurately compute ``e^x-1``.
 """
 expm1(x)
-for f in (:cbrt, :sinh, :cosh, :tanh, :atan, :asinh, :exp2, :expm1)
+for f in (:cbrt, :sinh, :cosh, :tanh, :atan, :asinh, :exp2)
     @eval begin
         ($f)(x::Float64) = ccall(($(string(f)),libm), Float64, (Float64,), x)
         ($f)(x::Float32) = ccall(($(string(f,"f")),libm), Float32, (Float32,), x)
@@ -984,6 +984,7 @@ sincos(a::Float16) = Float16.(sincos(Float32(a)))
 
 # More special functions
 include(joinpath("special", "exp.jl"))
+include(joinpath("special", "expm1.jl"))
 include(joinpath("special", "exp10.jl"))
 include(joinpath("special", "trig.jl"))
 include(joinpath("special", "gamma.jl"))
