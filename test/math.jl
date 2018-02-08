@@ -1005,9 +1005,12 @@ end
         @test cbrt(T(Inf)) === T(Inf)
         @test cbrt(-T(Inf)) === -T(Inf)
         @test isnan_type(T, cbrt(T(NaN)))
-        for x in (pcnfloat(nextfloat(nextfloat(zero(T)))),
-                  pcnfloat(prevfloat(prevfloat(zero(T)))),
-                  0.45, 0.6, 0.98, nextfloat(-T(Inf)), prevfloat(T(Inf)))
+        for x in (pcnfloat(nextfloat(nextfloat(zero(T))))...,
+                  pcnfloat(prevfloat(prevfloat(zero(T))))...,
+                  0.45, 0.6, 0.98,
+                  map(x->x^3, 1.0:1.0:1024.0)...,
+                  map(x->-x^3, 1.0:1.0:1024.0)...,
+                  nextfloat(-T(Inf)), prevfloat(T(Inf)))
             by = cbrt(big(T(x)))
             @test T((cbrt(T(x)) - by))/eps(abs(T(by))) <= 1
             bym = cbrt(big(T(-x)))
