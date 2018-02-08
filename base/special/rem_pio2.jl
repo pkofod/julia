@@ -45,14 +45,6 @@ const INV_2PI = UInt64[
     0x1580_cc11_bf1e_daea]
 
 """
-    highword(x)
-
-Return the high word of `x` as a `UInt32`.
-"""
-@inline highword(x::UInt64) = unsafe_trunc(UInt32,x >> 32)
-@inline highword(x::Float64) = highword(reinterpret(UInt64, x))
-
-"""
     poshighword(x)
 
 Return positive part of the high word of `x` as a `UInt32`.

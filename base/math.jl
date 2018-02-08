@@ -250,7 +250,7 @@ asinh(x::Number)
 Accurately compute ``e^x-1``.
 """
 expm1(x)
-for f in (:cbrt, :exp2, :expm1)
+for f in (:exp2, :expm1)
     @eval begin
         ($f)(x::Float64) = ccall(($(string(f)),libm), Float64, (Float64,), x)
         ($f)(x::Float32) = ccall(($(string(f,"f")),libm), Float32, (Float32,), x)
@@ -967,7 +967,22 @@ end
 cbrt(a::Float16) = Float16(cbrt(Float32(a)))
 sincos(a::Float16) = Float16.(sincos(Float32(a)))
 
+# helper functions for Libm functionality
+
+"""
+    highword(x)
+
+Return the high word of `x` as a `UInt32`.
+"""
+@inline highword(x::Float64) = highword(reinterpret(UInt64, x))
+@inline highword(x::UInt64) = (x >> 32) % UInt32
+
+@inline highword(x::Float32) = reinterpret(UInt32, x)
+
+
+
 # More special functions
+include("special/cbrt.jl")
 include("special/exp.jl")
 include("special/exp10.jl")
 include("special/hyperbolic.jl")
@@ -975,5 +990,9 @@ include("special/trig.jl")
 include("special/gamma.jl")
 include("special/rem_pio2.jl")
 include("special/log.jl")
+
+module JuliaLibm
+include(joinpath("special", "log.jl"))
+end
 
 end # module

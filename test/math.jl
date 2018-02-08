@@ -994,3 +994,24 @@ float(x::FloatWrapper) = x
     @test isa(sin(z), Complex)
     @test isa(cos(z), Complex)
 end
+
+
+@testset "cbrt" begin
+    for T in (Float32, Float64)
+        @test cbrt(zero(T)) === zero(T)
+        @test cbrt(-zero(T)) === -zero(T)
+        @test cbrt(one(T)) === one(T)
+        @test cbrt(-one(T)) === -one(T)
+        @test cbrt(T(Inf)) === T(Inf)
+        @test cbrt(-T(Inf)) === -T(Inf)
+        @test isnan_type(T, cbrt(T(NaN)))
+        for x in (pcnfloat(nextfloat(nextfloat(zero(T)))),
+                  pcnfloat(prevfloat(prevfloat(zero(T)))),
+                  0.45, 0.6, 0.98, nextfloat(-T(Inf)), prevfloat(T(Inf)))
+            by = cbrt(big(T(x)))
+            @test T((cbrt(T(x)) - by))/eps(abs(T(by))) <= 1
+            bym = cbrt(big(T(-x)))
+            @test T(abs(cbrt(T(-x)) - bym))/eps(abs(T(bym))) <= 1
+        end
+    end
+end
