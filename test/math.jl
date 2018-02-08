@@ -1013,10 +1013,8 @@ pcnfloat(x) = prevfloat(x), x, nextfloat(x)
                   map(x->x^3, 1.0:1.0:1024.0)...,
                   nextfloat(-T(Inf)), prevfloat(T(Inf)))
             by = cbrt(big(T(x)))
-            #@test T((cbrt(T(x)) - by))/eps(abs(T(by))) <= 1
             @test cbrt(T(x)) ≈ by rtol=eps(T)
             bym = cbrt(big(T(-x)))
-            #@test T(abs(cbrt(T(-x)) - bym))/eps(abs(T(bym))) <= 1
             @test cbrt(T(-x)) ≈ bym rtol=eps(T)
         end
     end

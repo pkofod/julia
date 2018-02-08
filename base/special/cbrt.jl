@@ -34,7 +34,7 @@ cbrt_t_from_words(::Type{Float64}, s, high)   = reinterpret(Float64, UInt64(s | 
 cbrt_t_from_words_alt(::Type{Float64}, s, hx) = reinterpret(Float64, UInt64(s | (div(hx, 0x00000003) + cbrt_B1_64))<<32)
 
 function cbrt(x::Tf) where Tf <: Union{Float32, Float64}
-    # mathematically cbrt(x) is defined as the real number y such that y^2 == x
+    # mathematically cbrt(x) is defined as the real number y such that y^3 == x
 
     hw = highword(x) % Int32
     s = hw & 0x80000000
@@ -111,11 +111,11 @@ function cbrt(x::Tf) where Tf <: Union{Float32, Float64}
         t = reinterpret(Float64, u)
 
         # one step Newton iteration to 53 bits with error < 0.667 ulps
-        s = t*t             # t*t is exact */
-        r = x/s             # error <= 0.5 ulps; |r| < |t| */
-        w = t + t           # t+t is exact */
-        r = (r - t)/(w + r) # r-t is exact; w+r ~= 3*t */
-        t = t + t*r         # error <= 0.5 + 0.5/3 + epsilon */
+        s = t*t             # t*t is exact
+        r = x/s             # error <= 0.5 ulps; |r| < |t|
+        w = t + t           # t+t is exact
+        r = (r - t)/(w + r) # r-t is exact; w+r ~= 3*t
+        t = muladd(t*r, t)         # error <= 0.5 + 0.5/3 + epsilon
         return t
     end
 end
