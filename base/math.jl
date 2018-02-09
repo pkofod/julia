@@ -975,11 +975,17 @@ sincos(a::Float16) = Float16.(sincos(Float32(a)))
 Return the high word of `x` as a `UInt32`.
 """
 @inline highword(x::Float64) = highword(reinterpret(UInt64, x))
-@inline highword(x::UInt64) = (x >> 32) % UInt32
-
+@inline highword(x::UInt64)  = (x >> 32) % UInt32
 @inline highword(x::Float32) = reinterpret(UInt32, x)
 
+"""
+    poshighword(x)
 
+Return positive part of the high word of `x` as a `UInt32`.
+"""
+@inline poshighword(x::Float64) = poshighword(reinterpret(UInt64, x))
+@inline poshighword(x::UInt64)  = highword(x) & 0x7fffffff
+@inline poshighword(x::Float32) = highword(x) & 0x7fffffff
 
 # More special functions
 include("special/cbrt.jl")

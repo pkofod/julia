@@ -15,9 +15,6 @@
 
 cbrt(x::Real) = cbrt(float(x))
 
-issubnormal(::Type{Float64}, hw) = hw < 0x00100000
-issubnormal(::Type{Float32}, hw) = hw < 0x00800000
-
 const cbrt_B1_32 = 0x2a5119f2 # UInt32(709958130) # B1 = (127-127.0/3-0.03306235651)*2**23
 const cbrt_B1_64 = 0x2a9f7893 # UInt32(715094163) # B1 = (1023-1023/3-0.03306235651)*2**20
 
@@ -27,18 +24,14 @@ const cbrt_B2_64 = 0x297f7893 # UInt32(696219795) # B2 = (1023-1023/3-54/3-0.033
 cbrt_t(::Type{Float64}) = 1.8014398509481984e16# 2.0^54
 cbrt_t(::Type{Float32}) = 1.6777216f7 ## 2f0^24
 
-cbrt_t_from_words(::Type{Float32}, s, high)   = reinterpret(Float32, s | (div(high & 0x7fffffff, 0x00000003))+cbrt_B2_32)
-cbrt_t_from_words_alt(::Type{Float32}, s, hx) = reinterpret(Float32, s | (div(hx, 0x00000003) + cbrt_B1_32))
+cbrt_t_from_words(::Type{Float32}, high)   = reinterpret(Float32, (div(high & 0x7fffffff, 0x00000003))+cbrt_B2_32)
+cbrt_t_from_words_alt(::Type{Float32}, hx) = reinterpret(Float32, (div(hx, 0x00000003) + cbrt_B1_32))
 
-cbrt_t_from_words(::Type{Float64}, s, high)   = reinterpret(Float64, UInt64(s | (div(high & 0x7fffffff, 0x00000003)+cbrt_B2_64))<<32)
-cbrt_t_from_words_alt(::Type{Float64}, s, hx) = reinterpret(Float64, UInt64(s | (div(hx, 0x00000003) + cbrt_B1_64))<<32)
+cbrt_t_from_words(::Type{Float64}, high)   = reinterpret(Float64, UInt64((div(high & 0x7fffffff, 0x00000003)+cbrt_B2_64))<<32)
+cbrt_t_from_words_alt(::Type{Float64}, hx) = reinterpret(Float64, UInt64((div(hx, 0x00000003) + cbrt_B1_64))<<32)
 
-function cbrt(x::T) where T <: Union{Float32, Float64}
+function cbrt(x::Tf) where Tf <: Union{Float32, Float64}
     # mathematically cbrt(x) is defined as the real number y such that y^3 == x
-
-    hw = highword(x) % Int32
-    s = hw & 0x80000000
-    hw = xor(hw, s)
 
     if isnan(x) || isinf(x)
         return x
@@ -59,18 +52,18 @@ function cbrt(x::T) where T <: Union{Float32, Float64}
     # subtraction virtually to keep e >= 0 so that ordinary integer
     # division rounds towards minus infinity; this is also efficient.
 
-    if issubnormal(T, hw) # zero or subnormal?
-        if x == zero(T)
-            return x # cbrt(+-0) is itself
-        end
-        t = x*cbrt_t(T)
+    if x == zero(Tf)
+        return x # cbrt(+-0) is itself
+    elseif issubnormal(x) # zero or subnormal?
+        t = x*cbrt_t(Tf)
         high = highword(t)
-        t = cbrt_t_from_words(T, s, high)
+        t = copysign(cbrt_t_from_words(Tf, high), x)
     else
-        t = cbrt_t_from_words_alt(T, s, hw)
+        hw = poshighword(x)
+        t = copysign(cbrt_t_from_words_alt(Tf, hw), x)
     end
 
-    if T == Float32
+    if Tf == Float32
         # First step Newton iteration (solving t*t-x/t == 0) to 16 bits.  In
         # double precision so that its terms can be arranged for efficiency
         # without causing overflow or underflow.
@@ -85,7 +78,7 @@ function cbrt(x::T) where T <: Union{Float32, Float64}
         T = T*(Float64(x) + x + r)/(x + r + r)
 
         return Float32(T)
-    elseif T == Float64
+    elseif Tf == Float64
         # New cbrt to 23 bits:
         #    cbrt(x) = t*cbrt(x/t**3) ~= t*P(t**3/x)
         # where P(r) is a polynomial of degree 4 that approximates 1/cbrt(r)
