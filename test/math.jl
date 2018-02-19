@@ -995,9 +995,6 @@ float(x::FloatWrapper) = x
     @test isa(cos(z), Complex)
 end
 
-# prev, current, next float
-pcnfloat(x) = prevfloat(x), x, nextfloat(x)
-
 @testset "cbrt" begin
     for T in (Float32, Float64)
         @test cbrt(zero(T)) === zero(T)
