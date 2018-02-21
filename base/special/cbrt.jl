@@ -108,7 +108,7 @@ function cbrt(x::Tf) where Tf <: Union{Float32, Float64}
         r = x/s             # error <= 0.5 ulps; |r| < |t|
         w = t + t           # t+t is exact
         r = (r - t)/(w + r) # r-t is exact; w+r ~= 3*t
-        t = muladd(t, r, t)         # error <= 0.5 + 0.5/3 + epsilon
+        t = muladd(t, r, t) # error <= 0.5 + 0.5/3 + epsilon
         return t
     end
 end

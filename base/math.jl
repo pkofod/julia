@@ -257,7 +257,6 @@ for f in (:exp2, :expm1)
         ($f)(x::Real) = ($f)(float(x))
     end
 end
-# fallback definitions to prevent infinite loop from $f(x::Real) def above
 
 """
     cbrt(x::Real)
