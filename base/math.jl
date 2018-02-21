@@ -975,7 +975,7 @@ sincos(a::Float16) = Float16.(sincos(Float32(a)))
 Return the high word of `x` as a `UInt32`.
 """
 @inline highword(x::Float64) = highword(reinterpret(UInt64, x))
-@inline highword(x::UInt64)  = (x >> 32) % UInt32
+@inline highword(x::UInt64)  = (x >>> 32) % UInt32
 @inline highword(x::Float32) = reinterpret(UInt32, x)
 
 """
