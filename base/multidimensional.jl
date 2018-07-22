@@ -4,7 +4,7 @@
 module IteratorsMD
     import .Base: eltype, length, size, first, last, in, getindex,
                  setindex!, IndexStyle, min, max, zero, one, isless, eachindex,
-                 ndims, IteratorSize, convert, show, iterate
+                 ndims, IteratorSize, convert, show, iterate, promote_rule
 
     import .Base: +, -, *
     import .Base: simd_outer_range, simd_inner_length, simd_index
@@ -202,7 +202,7 @@ module IteratorsMD
 
     ```jldoctest
     julia> cartesian = CartesianIndices((1:3, 1:2))
-    CartesianIndices{2,Tuple{UnitRange{Int64},UnitRange{Int64}}} with indices 1:3×1:2:
+    3×2 CartesianIndices{2,Tuple{UnitRange{Int64},UnitRange{Int64}}}:
      CartesianIndex(1, 1)  CartesianIndex(1, 2)
      CartesianIndex(2, 1)  CartesianIndex(2, 2)
      CartesianIndex(3, 1)  CartesianIndex(3, 2)
@@ -218,8 +218,6 @@ module IteratorsMD
     end
 
     CartesianIndices(::Tuple{}) = CartesianIndices{0,typeof(())}(())
-    CartesianIndices(inds::NTuple{N,AbstractUnitRange{Int}}) where {N} =
-        CartesianIndices{N,typeof(inds)}(inds)
     CartesianIndices(inds::NTuple{N,AbstractUnitRange{<:Integer}}) where {N} =
         CartesianIndices(map(r->convert(AbstractUnitRange{Int}, r), inds))
 
@@ -229,6 +227,9 @@ module IteratorsMD
         CartesianIndices(map(i->first(i):last(i), inds))
 
     CartesianIndices(A::AbstractArray) = CartesianIndices(axes(A))
+
+    promote_rule(::Type{CartesianIndices{N,R1}}, ::Type{CartesianIndices{N,R2}}) where {N,R1,R2} =
+        CartesianIndices{N,Base.indices_promote_type(R1,R2)}
 
     convert(::Type{Tuple{}}, R::CartesianIndices{0}) = ()
     convert(::Type{NTuple{N,AbstractUnitRange{Int}}}, R::CartesianIndices{N}) where {N} =
@@ -248,12 +249,19 @@ module IteratorsMD
     convert(::Type{Tuple{Vararg{UnitRange}}}, R::CartesianIndices) =
         convert(Tuple{Vararg{UnitRange{Int}}}, R)
 
+    convert(::Type{CartesianIndices{N,R}}, inds::CartesianIndices{N}) where {N,R} =
+        CartesianIndices(convert(R, inds.indices))
+
     # AbstractArray implementation
-    Base.axes(iter::CartesianIndices{N,R}) where {N,R} = iter.indices
+    Base.axes(iter::CartesianIndices{N,R}) where {N,R} = map(Base.axes1, iter.indices)
     Base.IndexStyle(::Type{CartesianIndices{N,R}}) where {N,R} = IndexCartesian()
-    @inline function Base.getindex(iter::CartesianIndices{N,R}, I::Vararg{Int, N}) where {N,R}
+    @inline function Base.getindex(iter::CartesianIndices{N,<:NTuple{N,Base.OneTo}}, I::Vararg{Int, N}) where {N}
         @boundscheck checkbounds(iter, I...)
         CartesianIndex(I)
+    end
+    @inline function Base.getindex(iter::CartesianIndices{N,R}, I::Vararg{Int, N}) where {N,R}
+        @boundscheck checkbounds(iter, I...)
+        CartesianIndex(I .- first.(Base.axes1.(iter.indices)) .+ first.(iter.indices))
     end
 
     ndims(R::CartesianIndices) = ndims(typeof(R))
@@ -319,7 +327,7 @@ module IteratorsMD
     end
 
     simd_inner_length(iter::CartesianIndices{0}, ::CartesianIndex) = 1
-    simd_inner_length(iter::CartesianIndices, I::CartesianIndex) = length(iter.indices[1])
+    simd_inner_length(iter::CartesianIndices, I::CartesianIndex) = Base.length(iter.indices[1])
 
     simd_index(iter::CartesianIndices{0}, ::CartesianIndex, I1::Int) = first(iter)
     @inline function simd_index(iter::CartesianIndices, Ilast::CartesianIndex, I1::Int)
@@ -461,7 +469,7 @@ index_dimsum() = ()
 index_lengths() = ()
 @inline index_lengths(::Real, rest...) = (1, index_lengths(rest...)...)
 @inline index_lengths(A::AbstractArray, rest...) = (length(A), index_lengths(rest...)...)
-@inline index_lengths(A::Slice, rest...) = (length(indices1(A)), index_lengths(rest...)...)
+@inline index_lengths(A::Slice, rest...) = (length(axes1(A)), index_lengths(rest...)...)
 
 # shape of array to create for getindex() with indices I, dropping scalars
 # returns a Tuple{Vararg{AbstractUnitRange}} of indices
@@ -645,7 +653,10 @@ _iterable(X::AbstractArray, I...) = X
     end
 end
 
-diff(a::AbstractVector) = [ a[i+1] - a[i] for i=1:length(a)-1 ]
+function diff(a::AbstractVector)
+    @assert !has_offset_axes(a)
+    [ a[i+1] - a[i] for i=1:length(a)-1 ]
+end
 
 """
     diff(A::AbstractVector)
@@ -719,7 +730,7 @@ end
 @inline function _indicesmightoverlap(A::Tuple{AbstractUnitRange, Vararg{Any}}, B::Tuple{AbstractUnitRange, Vararg{Any}})
     max(first(A[1]),first(B[1])) <= min(last(A[1]),last(B[1])) ? _indicesmightoverlap(tail(A), tail(B)) : false
 end
-# And we can check scalars against eachother and scalars against arrays quite easily
+# And we can check scalars against each other and scalars against arrays quite easily
 @inline _indicesmightoverlap(A::Tuple{Real, Vararg{Any}}, B::Tuple{Real, Vararg{Any}}) =
     A[1] == B[1] ? _indicesmightoverlap(tail(A), tail(B)) : false
 @inline _indicesmightoverlap(A::Tuple{Real, Vararg{Any}}, B::Tuple{AbstractArray, Vararg{Any}}) =
@@ -1414,7 +1425,7 @@ _unique_dims(A::AbstractArray, dims::Colon) = invoke(unique, Tuple{Any}, A)
 end
 
 """
-    extrema(A, dims) -> Array{Tuple}
+    extrema(A::AbstractArray; dims) -> Array{Tuple}
 
 Compute the minimum and maximum elements of an array over the given dimensions.
 
@@ -1430,7 +1441,7 @@ julia> A = reshape(Vector(1:2:16), (2,2,2))
   9  13
  11  15
 
-julia> extrema(A, (1,2))
+julia> extrema(A, dims = (1,2))
 1×1×2 Array{Tuple{Int64,Int64},3}:
 [:, :, 1] =
  (1, 7)
@@ -1439,7 +1450,11 @@ julia> extrema(A, (1,2))
  (9, 15)
 ```
 """
-function extrema(A::AbstractArray, dims)
+extrema(A::AbstractArray; dims = :) = _extrema_dims(A, dims)
+
+_extrema_dims(A::AbstractArray, ::Colon) = _extrema_itr(A)
+
+function _extrema_dims(A::AbstractArray, dims)
     sz = [size(A)...]
     for d in dims
         sz[d] = 1
@@ -1449,6 +1464,7 @@ function extrema(A::AbstractArray, dims)
 end
 
 @noinline function extrema!(B, A)
+    @assert !has_offset_axes(B, A)
     sA = size(A)
     sB = size(B)
     for I in CartesianIndices(sB)
@@ -1469,7 +1485,7 @@ end
     return B
 end
 
-# Show for pairs() with Cartesian indicies. Needs to be here rather than show.jl for bootstrap order
+# Show for pairs() with Cartesian indices. Needs to be here rather than show.jl for bootstrap order
 function Base.showarg(io::IO, r::Iterators.Pairs{<:Integer, <:Any, <:Any, T}, toplevel) where T <: Union{AbstractVector, Tuple}
     print(io, "pairs(::$T)")
 end

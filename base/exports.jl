@@ -10,6 +10,7 @@ export
     Threads,
     Iterators,
     Broadcast,
+    MathConstants,
 
 # Types
     AbstractChannel,
@@ -84,6 +85,7 @@ export
     StridedVector,
     SubArray,
     SubString,
+    SubstitutionString,
     Timer,
     UnitRange,
     Val,
@@ -212,7 +214,6 @@ export
     asind,
     asinh,
     atan,
-    atan2,
     atand,
     atanh,
     big,
@@ -261,7 +262,6 @@ export
     floor,
     fma,
     frexp,
-    gamma,
     gcd,
     gcdx,
     hypot,
@@ -285,8 +285,6 @@ export
     ldexp,
     leading_ones,
     leading_zeros,
-    lfact,
-    lgamma,
     log,
     log10,
     log1p,
@@ -348,10 +346,6 @@ export
     ∛,
     ≈,
     ≉,
-
-# specfun
-    beta,
-    lbeta,
 
 # arrays
     axes,
@@ -632,21 +626,6 @@ export
     get_zero_subnormals,
     set_zero_subnormals,
 
-# statistics
-    cor,
-    cov,
-    mean!,
-    mean,
-    median!,
-    median,
-    middle,
-    quantile!,
-    quantile,
-    std,
-    stdm,
-    var,
-    varm,
-
 # iteration
     done,
     next,
@@ -701,6 +680,7 @@ export
     ismissing,
     missing,
     skipmissing,
+    something,
 
 # time
     sleep,
@@ -781,7 +761,6 @@ export
 # misc
     atexit,
     atreplinit,
-    clipboard,
     exit,
     ntuple,
 
@@ -972,7 +951,6 @@ export
     @allocated,
 
     # tasks
-    @schedule,
     @sync,
     @async,
     @task,
@@ -992,6 +970,7 @@ export
     @inline,
     @noinline,
     @nospecialize,
+    @specialize,
     @polly,
 
     @assert,

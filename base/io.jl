@@ -289,6 +289,8 @@ Read the entire contents of a file as a string.
 """
 read(filename::AbstractString, args...) = open(io->read(io, args...), filename)
 
+read(filename::AbstractString, ::Type{T}) where {T} = open(io->read(io, T), filename)
+
 """
     read!(stream::IO, array::Union{Array, BitArray})
     read!(filename::AbstractString, array::Union{Array, BitArray})
@@ -448,28 +450,28 @@ ENDIAN_BOM
 """
     ntoh(x)
 
-Converts the endianness of a value from Network byte order (big-endian) to that used by the Host.
+Convert the endianness of a value from Network byte order (big-endian) to that used by the Host.
 """
 ntoh(x)
 
 """
     hton(x)
 
-Converts the endianness of a value from that used by the Host to Network byte order (big-endian).
+Convert the endianness of a value from that used by the Host to Network byte order (big-endian).
 """
 hton(x)
 
 """
     ltoh(x)
 
-Converts the endianness of a value from Little-endian to that used by the Host.
+Convert the endianness of a value from Little-endian to that used by the Host.
 """
 ltoh(x)
 
 """
     htol(x)
 
-Converts the endianness of a value from that used by the Host to Little-endian.
+Convert the endianness of a value from that used by the Host to Little-endian.
 """
 htol(x)
 
@@ -542,7 +544,7 @@ function write(s::IO, a::Array)
 end
 
 function write(s::IO, a::SubArray{T,N,<:Array}) where {T,N}
-    if !isbitstype(T)
+    if !isbitstype(T) || !isa(a, StridedArray)
         return invoke(write, Tuple{IO, AbstractArray}, s, a)
     end
     elsz = sizeof(T)
@@ -804,6 +806,7 @@ The size of `b` will be increased if needed (i.e. if `nb` is greater than `lengt
 and enough bytes could be read), but it will never be decreased.
 """
 function readbytes!(s::IO, b::AbstractArray{UInt8}, nb=length(b))
+    @assert !has_offset_axes(b)
     olb = lb = length(b)
     nr = 0
     while nr < nb && !eof(s)

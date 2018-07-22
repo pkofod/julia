@@ -13,10 +13,9 @@ import Base: getindex, wait, put!, take!, fetch, isready, push!, length,
 
 # imports for use
 using Base: Process, Semaphore, JLOptions, AnyDict, buffer_writes, wait_connected,
-            VERSION_STRING, sync_begin, sync_add, sync_end, async_run_thunk,
-            binding_module, notify_error, atexit, julia_exename, julia_cmd,
-            AsyncGenerator, acquire, release, invokelatest,
-            shell_escape_posixly, uv_error, coalesce, notnothing
+            VERSION_STRING, binding_module, notify_error, atexit, julia_exename,
+            julia_cmd, AsyncGenerator, acquire, release, invokelatest,
+            shell_escape_posixly, uv_error, something, notnothing
 
 using Serialization, Sockets
 import Serialization: serialize, deserialize
@@ -104,7 +103,6 @@ include("precompile.jl")
 @deprecate pmap(p::AbstractWorkerPool, f, c1, c...; kwargs...) pmap(f, p, c1, c...; kwargs...)
 
 function __init__()
-    push!(Base.package_callbacks, _require_callback)
     init_parallel()
 end
 

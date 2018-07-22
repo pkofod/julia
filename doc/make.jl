@@ -1,16 +1,10 @@
-if "deploy" in ARGS
-    # Only deploy docs from 64bit Linux to avoid committing multiple versions of the same
-    # docs from different workers.
-    (Sys.ARCH === :x86_64 && Sys.KERNEL === :Linux) || exit()
-end
-
 # Install dependencies needed to build the documentation.
-ENV["JULIA_PKGDIR"] = joinpath(@__DIR__, "deps")
+empty!(LOAD_PATH)
+push!(LOAD_PATH, @__DIR__, "@stdlib")
+empty!(DEPOT_PATH)
+pushfirst!(DEPOT_PATH, joinpath(@__DIR__, "deps"))
 using Pkg
-Pkg.init()
-cp(joinpath(@__DIR__, "REQUIRE"), Pkg.dir("REQUIRE"); force = true)
-Pkg.update()
-Pkg.resolve()
+Pkg.instantiate()
 
 using Documenter
 
@@ -57,7 +51,6 @@ const PAGES = [
     "Home" => "index.md",
     hide("NEWS.md"),
     "Manual" => [
-        "manual/introduction.md",
         "manual/getting-started.md",
         "manual/variables.md",
         "manual/integers-and-floating-point-numbers.md",
@@ -84,7 +77,6 @@ const PAGES = [
         "manual/handling-operating-system-variation.md",
         "manual/environment-variables.md",
         "manual/embedding.md",
-        "manual/packages.md",
         "manual/code-loading.md",
         "manual/profile.md",
         "manual/stacktraces.md",
@@ -153,33 +145,39 @@ for stdlib in STDLIB_DOCS
     @eval using $(stdlib.stdlib)
 end
 
+const render_pdf = "pdf" in ARGS
 makedocs(
-    build     = joinpath(@__DIR__, "_build/html/en"),
+    build     = joinpath(@__DIR__, "_build", (render_pdf ? "pdf" : "html"), "en"),
     modules   = [Base, Core, BuildSysImg, [Base.root_module(Base, stdlib.stdlib) for stdlib in STDLIB_DOCS]...],
     clean     = true,
-    doctest   = ("doctest-fix" in ARGS) ? (:fix) : ("doctest" in ARGS),
-    linkcheck = "linkcheck" in ARGS,
+    doctest   = ("doctest=fix" in ARGS) ? (:fix) : ("doctest=true" in ARGS) ? true : false,
+    linkcheck = "linkcheck=true" in ARGS,
     linkcheck_ignore = ["https://bugs.kde.org/show_bug.cgi?id=136779"], # fails to load from nanosoldier?
     strict    = true,
     checkdocs = :none,
-    format    = "pdf" in ARGS ? :latex : :html,
+    format    = render_pdf ? :latex : :html,
     sitename  = "The Julia Language",
     authors   = "The Julia Project",
     analytics = "UA-28835595-6",
     pages     = PAGES,
     html_prettyurls = ("deploy" in ARGS),
     html_canonical = ("deploy" in ARGS) ? "https://docs.julialang.org/en/stable/" : nothing,
+    assets = ["assets/julia-manual.css", ]
 )
 
+# Only deploy docs from 64bit Linux to avoid committing multiple versions of the same
+# docs from different workers.
+if "deploy" in ARGS && Sys.ARCH === :x86_64 && Sys.KERNEL === :Linux
+    # Since the `.travis.yml` config specifies `language: cpp` and not `language: julia` we
+    # need to manually set the version of Julia that we are deploying the docs from.
+    ENV["TRAVIS_JULIA_VERSION"] = "nightly"
 
-# Since the `.travis.yml` config specifies `language: cpp` and not `language: julia` we
-# need to manually set the version of Julia that we are deploying the docs from.
-ENV["TRAVIS_JULIA_VERSION"] = "nightly"
-
-deploydocs(
-    repo = "github.com/JuliaLang/julia.git",
-    target = "_build/html/en",
-    dirname = "en",
-    deps = nothing,
-    make = nothing,
-)
+    deploydocs(
+        julia = "nightly",
+        repo = "github.com/JuliaLang/julia.git",
+        target = "_build/html/en",
+        dirname = "en",
+        deps = nothing,
+        make = nothing,
+    )
+end

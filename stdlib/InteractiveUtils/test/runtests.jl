@@ -175,7 +175,7 @@ end
 # PR #23075
 @testset "versioninfo" begin
     # check that versioninfo(io; verbose=true) doesn't error, produces some output
-    # and doesn't invoke Pkg.status which will error if JULIA_PKGDIR is set
+    # and doesn't invoke OldPkg.status which will error if JULIA_PKGDIR is set
     mktempdir() do dir
         withenv("JULIA_PKGDIR" => dir) do
             buf = PipeBuffer()
@@ -183,8 +183,6 @@ end
             ver = read(buf, String)
             @test startswith(ver, "Julia Version $VERSION")
             @test occursin("Environment:", ver)
-            @test occursin("Package Status:", ver)
-            @test occursin("no packages installed", ver)
             @test isempty(readdir(dir))
         end
     end
@@ -192,7 +190,7 @@ end
         @test !occursin("Environment:", read(setenv(`$exename -e 'using InteractiveUtils; versioninfo()'`,
                                                     String[]), String))
         @test  occursin("Environment:", read(setenv(`$exename -e 'using InteractiveUtils; versioninfo()'`,
-                                                    String["JULIA_CPU_CORES=1"]), String))
+                                                    String["JULIA_CPU_THREADS=1"]), String))
     end
 end
 
@@ -202,7 +200,13 @@ const curmod_str = curmod === Main ? "Main" : join(curmod_name, ".")
 
 @test_throws ErrorException("\"this_is_not_defined\" is not defined in module $curmod_str") @which this_is_not_defined
 # issue #13264
-@test isa((@which vcat(1...)), Method)
+@test (@which vcat(1...)).name == :vcat
+
+# PR #28122
+@test (@which [1][1]).name === :getindex
+@test (@which [1 2]).name == :hcat
+@test (@which [1; 2]).name == :vcat
+@test (@which [1]).name == :vect
 
 # issue #13464
 let t13464 = "hey there sailor"
@@ -331,6 +335,13 @@ if Sys.ARCH === :x86_64 || occursin(ix86, string(Sys.ARCH))
     @test occursin(rgx, output)
 end
 
+@testset "error message" begin
+    err = ErrorException("expression is not a function call or symbol")
+    @test_throws err @code_lowered ""
+    @test_throws err @code_lowered 1
+    @test_throws err @code_lowered 1.0
+end
+
 using InteractiveUtils: editor
 
 # Issue #13032
@@ -370,4 +381,12 @@ withenv("JULIA_EDITOR" => nothing, "VISUAL" => nothing, "EDITOR" => nothing) do
 
     ENV["JULIA_EDITOR"] = "\"/Applications/Sublime Text.app/Contents/SharedSupport/bin/subl\" -w"
     @test editor() == ["/Applications/Sublime Text.app/Contents/SharedSupport/bin/subl", "-w"]
+end
+
+# clipboard functionality
+if Sys.iswindows() || Sys.isapple()
+    for str in ("Hello, world.", "∀ x ∃ y", "")
+        clipboard(str)
+        @test clipboard() == str
+    end
 end

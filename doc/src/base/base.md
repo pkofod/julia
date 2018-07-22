@@ -22,8 +22,6 @@ Base.exit
 Base.atexit
 Base.isinteractive
 Base.summarysize
-Base.clipboard(::Any)
-Base.clipboard()
 Base.require
 Base.compilecache
 Base.__precompile__
@@ -185,6 +183,7 @@ Base.Val
 Core.Vararg
 Core.Nothing
 Base.Some
+Base.something
 Base.Enums.@enum
 ```
 
@@ -214,10 +213,12 @@ Base.@boundscheck
 Base.@inline
 Base.@noinline
 Base.@nospecialize
+Base.@specialize
 Base.gensym
 Base.@gensym
 Base.@goto
 Base.@label
+Base.@simd
 Base.@polly
 ```
 
@@ -288,6 +289,7 @@ Base.@assert
 Base.ArgumentError
 Base.AssertionError
 Core.BoundsError
+Base.CompositeException
 Base.DimensionMismatch
 Core.DivideError
 Core.DomainError

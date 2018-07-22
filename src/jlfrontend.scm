@@ -43,6 +43,15 @@
                                       tab)))
                 ((lambda)       tab)
                 ((local)        tab)
+                ((scope-block)
+                 ;; TODO: when deprecation for implicit global assignment inside loops
+                 ;; is removed, remove this code and just return `tab` in this case
+                 (let ((tab2 (table)))
+                   (find-possible-globals- (cadr e) tab2)
+                   (for-each (lambda (v) (if (has? tab2 v) (del! tab2 v)))
+                             (append (find-local-decls (cadr e)) (find-local-def-decls (cadr e))))
+                   (for-each (lambda (v) (put! tab v #t))
+                             (table.keys tab2))))
                 ((break-block)  (find-possible-globals- (caddr e) tab))
                 ((module toplevel) '())
                 (else
@@ -87,9 +96,13 @@
                                      ,@(map (lambda (v) `(implicit-global ,v)) gv)
                                      ,ex))))))
           (if (and (null? (cdadr (caddr th)))
-                   (= 0 (cadddr (caddr th))))
-              ;; if no locals, return just body of function
-              (cadddr th)
+                   (and (length= (lam:body th) 2)
+                        (let ((retval (cadadr (lam:body th))))
+                          (or (and (pair? retval) (eq? (car retval) 'lambda))
+                              (simple-atom? retval)))))
+              ;; generated functions use the pattern (body (return (lambda ...))), which
+              ;; needs to be unwrapped to just the lambda (CodeInfo).
+              (cadadr (lam:body th))
               `(thunk ,th))))))
 
 (define *in-expand* #f)
@@ -111,12 +124,8 @@
            (if (not last)
                (begin (reset-gensyms)
                       (set! *in-expand* #t)))
-           (let ((ex (expand-toplevel-expr-- e)))
-             (set! *in-expand* last)
-             (if (and (length= ex 2) (eq? (car ex) 'body))
-                 ;; (body (return x)) => x
-                 (cadadr ex)
-                 ex))))))
+           (begin0 (expand-toplevel-expr-- e)
+                   (set! *in-expand* last))))))
 
 ;; construct default definitions of `eval` for non-bare modules
 ;; called by jl_eval_module_expr
@@ -132,13 +141,13 @@
            ,loc
            (call (core eval) ,name ,x)))
        (if (&& (call (top isdefined) (core Main) (quote Base))
-               (call (top isdefined) (top Base) (quote @deprecate)))
+               (call (top isdefined) (|.| (core Main) (quote Base)) (quote @deprecate)))
            (call eval
                  (quote
-                  (macrocall (top @deprecate)
+                  (macrocall (|.| (|.| (core Main) (quote Base)) (quote @deprecate))
                              (line 0 none)
                              (call eval m x)
-                             (call (|.| Core (quote eval)) m x)
+                             (call (|.| Core (quote eval)) m x) ; should be (core eval), but format as Core.eval(m, x) for deprecation warning
                              false))))
        (= (call include ,x)
           (block

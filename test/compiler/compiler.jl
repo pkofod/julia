@@ -1,7 +1,8 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
 # tests for Core.Compiler correctness and precision
-import Core.Compiler: Const, Conditional, ⊑, isdispatchelem
+import Core.Compiler: Const, Conditional, ⊑
+isdispatchelem(@nospecialize x) = !isa(x, Type) || Core.Compiler.isdispatchelem(x)
 
 using Random, Core.IR
 using InteractiveUtils: code_llvm
@@ -252,7 +253,6 @@ end
 end
 let ast12474 = code_typed(f12474, Tuple{Float64})
     @test isdispatchelem(ast12474[1][2])
-    @test all(x -> isdispatchelem(Core.Compiler.typesubtract(x, Nothing)), ast12474[1][1].slottypes)
 end
 
 
@@ -477,24 +477,24 @@ function is_typed_expr(e::Expr)
     end
     return false
 end
+is_typed_expr(@nospecialize other) = false
 test_inferred_static(@nospecialize(other)) = true
 test_inferred_static(slot::TypedSlot) = @test isdispatchelem(slot.typ)
 function test_inferred_static(expr::Expr)
-    if is_typed_expr(expr)
-        @test isdispatchelem(expr.typ)
-    end
     for a in expr.args
         test_inferred_static(a)
     end
 end
-function test_inferred_static(arrow::Pair)
+function test_inferred_static(arrow::Pair, all_ssa)
     code, rt = arrow
     @test isdispatchelem(rt)
     @test code.inferred
-    @test all(isdispatchelem, code.slottypes)
-    @test all(isdispatchelem, code.ssavaluetypes)
-    for e in code.code
+    for i = 1:length(code.code)
+        e = code.code[i]
         test_inferred_static(e)
+        if all_ssa && is_typed_expr(e)
+            @test isdispatchelem(code.ssavaluetypes[i])
+        end
     end
 end
 
@@ -507,6 +507,7 @@ function f18679()
             return a[1]
         end
     end
+    error()
 end
 g18679(x::Tuple) = ()
 g18679() = g18679(any_undef_global::Union{Int, Tuple{}})
@@ -529,26 +530,28 @@ function g19348(x)
     return a + b + c[1]
 end
 
-for codetype in Any[
-        code_typed(f18679, ())[1],
-        code_typed(g18679, ())[1],
-        code_typed(h18679, ())[1],
-        code_typed(g19348, (typeof((1, 2.0)),))[1]]
-    # make sure none of the slottypes are left as Core.Compiler.Const objects
+for (codetype, all_ssa) in Any[
+        (code_typed(f18679, ())[1], true),
+        (code_typed(g18679, ())[1], false),
+        (code_typed(h18679, ())[1], true),
+        (code_typed(g19348, (typeof((1, 2.0)),))[1], true)]
     code = codetype[1]
-    @test all(x->isa(x, Type), code.slottypes)
     local notconst(@nospecialize(other)) = true
     notconst(slot::TypedSlot) = @test isa(slot.typ, Type)
     function notconst(expr::Expr)
-        @test isa(expr.typ, Type)
         for a in expr.args
             notconst(a)
         end
     end
-    for e in code.code
+    local i
+    for i = 1:length(code.code)
+        e = code.code[i]
         notconst(e)
+        typ = code.ssavaluetypes[i]
+        typ isa Core.Compiler.MaybeUndef && (typ = typ.typ)
+        @test isa(typ, Type) || isa(typ, Const) || isa(typ, Conditional) || typ
     end
-    test_inferred_static(code)
+    test_inferred_static(codetype, all_ssa)
 end
 @test f18679() === ()
 @test_throws UndefVarError(:any_undef_global) g18679()
@@ -857,7 +860,7 @@ function break_21369()
         local fr
         while true
             fr = Base.StackTraces.lookup(bt[i])[end]
-            if !fr.from_c
+            if !fr.from_c && fr.func !== :error
                 break
             end
             i += 1
@@ -930,11 +933,12 @@ let f, m
     f() = 0
     m = first(methods(f))
     m.source = Base.uncompressed_ast(m)::CodeInfo
-    m.source.ssavaluetypes = 2
+    m.source.ssavaluetypes = 3
+    m.source.codelocs = Int32[1, 1, 1]
     m.source.code = Any[
-        Expr(:(=), SSAValue(0), Expr(:call, GlobalRef(Core, :svec), 1, 2, 3)),
-        Expr(:(=), SSAValue(1), Expr(:call, Core._apply, GlobalRef(Base, :+), SSAValue(0))),
-        Expr(:return, SSAValue(1))
+        Expr(:call, GlobalRef(Core, :svec), 1, 2, 3),
+        Expr(:call, Core._apply, GlobalRef(Base, :+), SSAValue(1)),
+        Expr(:return, SSAValue(2))
     ]
     @test @inferred(f()) == 6
 end
@@ -1026,7 +1030,7 @@ function count_specializations(method::Method)
     return n::Int
 end
 
-# demonstrate that inference can complete without waiting for MAX_TUPLETYPE_LEN or MAX_TYPE_DEPTH
+# demonstrate that inference can complete without waiting for MAX_TYPE_DEPTH
 copy_dims_out(out) = ()
 copy_dims_out(out, dim::Int, tail...) =  copy_dims_out((out..., dim), tail...)
 copy_dims_out(out, dim::Colon, tail...) = copy_dims_out((out..., dim), tail...)
@@ -1098,8 +1102,7 @@ function test_const_return(@nospecialize(f), @nospecialize(t), @nospecialize(val
         if isa(ex, LineNumberNode)
             continue
         elseif isa(ex, Expr)
-            ex = ex::Expr
-            if Core.Compiler.is_meta_expr(ex)
+            if Core.Compiler.is_meta_expr_head(ex.head)
                 continue
             elseif ex.head === :return
                 # multiple returns
@@ -1117,7 +1120,6 @@ function test_const_return(@nospecialize(f), @nospecialize(t), @nospecialize(val
 end
 
 function find_call(code::Core.CodeInfo, @nospecialize(func), narg)
-    new_style_ir = code.codelocs !== nothing
     for ex in code.code
         Meta.isexpr(ex, :(=)) && (ex = ex.args[2])
         isa(ex, Expr) || continue
@@ -1128,7 +1130,7 @@ function find_call(code::Core.CodeInfo, @nospecialize(func), narg)
                     farg = typeof(getfield(farg.mod, farg.name))
                 end
             elseif isa(farg, Core.SSAValue)
-                farg = code.ssavaluetypes[farg.id + (new_style_ir ? 0 : 1)]
+                farg = Core.Compiler.widenconst(code.ssavaluetypes[farg.id])
             else
                 farg = typeof(farg)
             end
@@ -1145,6 +1147,7 @@ test_const_return(()->sizeof(Int), Tuple{}, sizeof(Int))
 test_const_return(()->sizeof(1), Tuple{}, sizeof(Int))
 test_const_return(()->sizeof(DataType), Tuple{}, sizeof(DataType))
 test_const_return(()->sizeof(1 < 2), Tuple{}, 1)
+test_const_return(()->fieldtype(Dict{Int64,Nothing}, :age), Tuple{}, UInt)
 @eval test_const_return(()->Core.sizeof($(Array{Int,0}(undef))), Tuple{}, sizeof(Int))
 @eval test_const_return(()->Core.sizeof($(Matrix{Float32}(undef, 2, 2))), Tuple{}, 4 * 2 * 2)
 
@@ -1177,7 +1180,7 @@ let isa_tfunc = Core.Compiler.T_FFUNC_VAL[
     @test isa_tfunc(Array{Real}, Type{AbstractArray{Int}}) === Const(false)
     @test isa_tfunc(Array{Real, 2}, Const(AbstractArray{Real, 2})) === Const(true)
     @test isa_tfunc(Array{Real, 2}, Const(AbstractArray{Int, 2})) === Const(false)
-    @test isa_tfunc(DataType, Int) === Bool # could be improved
+    @test isa_tfunc(DataType, Int) === Union{}
     @test isa_tfunc(DataType, Const(Type{Int})) === Bool
     @test isa_tfunc(DataType, Const(Type{Array})) === Bool
     @test isa_tfunc(UnionAll, Const(Type{Int})) === Bool # could be improved
@@ -1187,7 +1190,7 @@ let isa_tfunc = Core.Compiler.T_FFUNC_VAL[
     @test isa_tfunc(typeof(Union{}), Const(Int)) === Const(false) # any result is ok
     @test isa_tfunc(typeof(Union{}), Const(Union{})) === Const(false)
     @test isa_tfunc(typeof(Union{}), typeof(Union{})) === Const(false)
-    @test isa_tfunc(typeof(Union{}), Union{}) === Const(false) # any result is ok
+    @test isa_tfunc(typeof(Union{}), Union{}) === Union{}
     @test isa_tfunc(typeof(Union{}), Type{typeof(Union{})}) === Const(true)
     @test isa_tfunc(typeof(Union{}), Const(typeof(Union{}))) === Const(true)
     let c = Conditional(Core.SlotNumber(0), Const(Union{}), Const(Union{}))
@@ -1202,7 +1205,7 @@ let isa_tfunc = Core.Compiler.T_FFUNC_VAL[
     @test isa_tfunc(Val{1}, Type{Val{T}} where T) === Bool
     @test isa_tfunc(Val{1}, DataType) === Bool
     @test isa_tfunc(Any, Const(Any)) === Const(true)
-    @test isa_tfunc(Any, Union{}) === Const(false) # any result is ok
+    @test isa_tfunc(Any, Union{}) === Union{}
     @test isa_tfunc(Any, Type{Union{}}) === Const(false)
     @test isa_tfunc(Union{Int64, Float64}, Type{Real}) === Const(true)
     @test isa_tfunc(Union{Int64, Float64}, Type{Integer}) === Bool
@@ -1243,7 +1246,7 @@ let subtype_tfunc = Core.Compiler.T_FFUNC_VAL[
     @test subtype_tfunc(Type{Union{}}, Union{Type{Int64}, Type{Float64}}) === Const(true)
     @test subtype_tfunc(Type{Union{}}, Union{Type{T}, Type{Float64}} where T) === Const(true)
     let c = Conditional(Core.SlotNumber(0), Const(Union{}), Const(Union{}))
-        @test subtype_tfunc(c, Const(Bool)) === Bool # any result is ok
+        @test subtype_tfunc(c, Const(Bool)) === Const(true) # any result is ok
     end
     @test subtype_tfunc(Type{Val{1}}, Type{Val{T}} where T) === Bool
     @test subtype_tfunc(Type{Val{1}}, DataType) === Bool
@@ -1298,7 +1301,7 @@ let linfo = get_linfo(Base.convert, Tuple{Type{Int64}, Int32}),
     opt = Core.Compiler.OptimizationState(linfo, Core.Compiler.Params(world))
     # make sure the state of the properties look reasonable
     @test opt.src !== linfo.def.source
-    @test length(opt.src.slotflags) == length(opt.src.slotnames) == length(opt.src.slottypes)
+    @test length(opt.src.slotflags) == length(opt.src.slotnames)
     @test opt.src.ssavaluetypes isa Vector{Any}
     @test !opt.src.inferred
     @test opt.mod === Base
@@ -1362,10 +1365,9 @@ function f24852_kernel_cinfo(fsig::Type)
     sig, spvals, method = Base._methods_by_ftype(fsig, -1, world)[1]
     isdefined(method, :source) || return (nothing, :(f(x, y)))
     code_info = Base.uncompressed_ast(method)
-    body = Expr(:block, code_info.code...)
-    Base.Core.Compiler.substitute!(body, 0, Any[], sig, Any[spvals...], 1, :propagate)
+    Meta.partially_inline!(code_info.code, Any[], sig, Any[spvals...], 1, 0, :propagate)
     if startswith(String(method.name), "f24852")
-        for a in body.args
+        for a in code_info.code
             if a isa Expr && a.head == :(=)
                 a = a.args[2]
             end
@@ -1467,6 +1469,19 @@ result = f24852_kernel(x, y)
 # TODO: test that `expand_early = true` + inflated `method_for_inference_limit_heuristics`
 # can be used to tighten up some inference result.
 
+f26339(T) = T === Union{} ? 1 : ""
+g26339(T) = T === Int ? 1 : ""
+@test Base.return_types(f26339, (Int,)) == Any[String]
+@test Base.return_types(g26339, (Int,)) == Any[String]
+@test Base.return_types(f26339, (Type{Int},)) == Any[String]
+@test Base.return_types(g26339, (Type{Int},)) == Any[Int]
+@test Base.return_types(f26339, (Type{Union{}},)) == Any[Int]
+@test Base.return_types(g26339, (Type{Union{}},)) == Any[String]
+@test Base.return_types(f26339, (typeof(Union{}),)) == Any[Int]
+@test Base.return_types(g26339, (typeof(Union{}),)) == Any[String]
+@test Base.return_types(f26339, (Type,)) == Any[Union{Int, String}]
+@test Base.return_types(g26339, (Type,)) == Any[Union{Int, String}]
+
 # Test that Conditional doesn't get widened to Bool too quickly
 f25261() = (1, 1)
 f25261(s) = i == 1 ? (1, 2) : nothing
@@ -1482,13 +1497,11 @@ i = 1
 while !Meta.isexpr(opt25261[i], :gotoifnot); global i += 1; end
 foundslot = false
 for expr25261 in opt25261[i:end]
-    Meta.isexpr(expr25261, :(=)) || continue
-    isa(expr25261.args[2], Union{GlobalRef, Expr}) && continue
-    # This should be the assignment to the SSAValue into the getfield
-    # call - make sure it's a TypedSlot
-    @test isa(expr25261.args[2], TypedSlot)
-    @test expr25261.args[2].typ === Tuple{Int, Int}
-    global foundslot = true
+    if expr25261 isa TypedSlot && expr25261.typ === Tuple{Int, Int}
+        # This should be the assignment to the SSAValue into the getfield
+        # call - make sure it's a TypedSlot
+        global foundslot = true
+    end
 end
 @test foundslot
 
@@ -1513,6 +1526,7 @@ function h25579(g)
     try
         h = -1.25
         error("continue at catch block")
+    catch
     end
     return t ? typeof(h) : typeof(h)
 end
@@ -1551,12 +1565,15 @@ g26826(x) = getfield26826(x, :a, :b)
 # If this test is broken (especially if inference is getting a correct, but loose result,
 # like a Union) then it's potentially an indication that the optimizer isn't hitting the
 # InferenceResult cache properly for varargs methods.
-typed_code = Core.Compiler.code_typed(f26826, (Float64,))[1].first.code
+typed_code = Core.Compiler.code_typed(f26826, (Float64,))[1].first
 found_well_typed_getfield_call = false
-for stmt in typed_code
-    lhs = Meta.isexpr(stmt, :(=)) ? stmt.args[2] : stmt
-    if Meta.isexpr(lhs, :call) && lhs.args[1] == GlobalRef(Base, :getfield) && lhs.typ === Float64
-        global found_well_typed_getfield_call = true
+let i
+    for i = 1:length(typed_code.code)
+        stmt = typed_code.code[i]
+        rhs = Meta.isexpr(stmt, :(=)) ? stmt.args[2] : stmt
+        if Meta.isexpr(rhs, :call) && rhs.args[1] == GlobalRef(Base, :getfield) && typed_code.ssavaluetypes[i] === Float64
+            global found_well_typed_getfield_call = true
+        end
     end
 end
 
@@ -1580,3 +1597,155 @@ function _g_ifelse_isa_()
     ifelse(isa(x, Nothing), 1, x)
 end
 @test Base.return_types(_g_ifelse_isa_, ()) == [Int]
+
+# Equivalence of Const(T.instance) and T for singleton types
+@test Const(nothing) ⊑ Nothing && Nothing ⊑ Const(nothing)
+
+# Don't pessimize apply_type to anything worse than Type and yield Bottom for invalid Unions
+@test Core.Compiler.return_type(Core.apply_type, Tuple{Type{Union}}) == Type{Union{}}
+@test Core.Compiler.return_type(Core.apply_type, Tuple{Type{Union},Any}) == Type
+@test Core.Compiler.return_type(Core.apply_type, Tuple{Type{Union},Any,Any}) == Type
+@test Core.Compiler.return_type(Core.apply_type, Tuple{Type{Union},Int}) == Union{}
+@test Core.Compiler.return_type(Core.apply_type, Tuple{Type{Union},Any,Int}) == Union{}
+@test Core.Compiler.return_type(Core.apply_type, Tuple{Any}) == Type
+@test Core.Compiler.return_type(Core.apply_type, Tuple{Any,Any}) == Type
+
+# PR 27351, make sure optimized type intersection for method invalidation handles typevars
+
+abstract type AbstractT27351 end
+struct T27351 <: AbstractT27351 end
+for i27351 in 1:15
+    @eval f27351(::Val{$i27351}, ::AbstractT27351, ::AbstractT27351) = $i27351
+end
+f27351(::T, ::T27351, ::T27351) where {T} = 16
+@test_throws MethodError f27351(Val(1), T27351(), T27351())
+
+# Domsort stress test (from JLD2.jl) - Issue #27625
+function JLD2_hash(k::Ptr{UInt8}, n::Integer=length(k), initval::UInt32=UInt32(0))
+    # Set up the internal state
+    a = b = c = 0xdeadbeef + convert(UInt32, n) + initval
+
+    ptr = k
+    @inbounds while n > 12
+        a += unsafe_load(convert(Ptr{UInt32}, ptr))
+        ptr += 4
+        b += unsafe_load(convert(Ptr{UInt32}, ptr))
+        ptr += 4
+        c += unsafe_load(convert(Ptr{UInt32}, ptr))
+        (a, b, c) = mix(a, b, c)
+        ptr += 4
+        n -= 12
+    end
+    @inbounds if n > 0
+        if n == 12
+            c += unsafe_load(convert(Ptr{UInt32}, ptr+8))
+            @goto n8
+        elseif n == 11
+            c += UInt32(unsafe_load(Ptr{UInt8}(ptr+10)))<<16
+            @goto n10
+        elseif n == 10
+            @label n10
+            c += UInt32(unsafe_load(Ptr{UInt8}(ptr+9)))<<8
+            @goto n9
+        elseif n == 9
+            @label n9
+            c += unsafe_load(ptr+8)
+            @goto n8
+        elseif n == 8
+            @label n8
+            b += unsafe_load(convert(Ptr{UInt32}, ptr+4))
+            @goto n4
+        elseif n == 7
+            @label n7
+            b += UInt32(unsafe_load(Ptr{UInt8}(ptr+6)))<<16
+            @goto n6
+        elseif n == 6
+            @label n6
+            b += UInt32(unsafe_load(Ptr{UInt8}(ptr+5)))<<8
+            @goto n5
+        elseif n == 5
+            @label n5
+            b += unsafe_load(ptr+4)
+            @goto n4
+        elseif n == 4
+            @label n4
+            a += unsafe_load(convert(Ptr{UInt32}, ptr))
+        elseif n == 3
+            @label n3
+            a += UInt32(unsafe_load(Ptr{UInt8}(ptr+2)))<<16
+            @goto n2
+        elseif n == 2
+            @label n2
+            a += UInt32(unsafe_load(Ptr{UInt8}(ptr+1)))<<8
+            @goto n1
+        elseif n == 1
+            @label n1
+            a += unsafe_load(ptr)
+        end
+        c = a + b + c
+    end
+    c
+end
+@test isa(code_typed(JLD2_hash, Tuple{Ptr{UInt8}, Int, UInt32}), Array)
+
+# issue #19668
+struct Foo19668
+    Foo19668(; kwargs...) = new()
+end
+@test Base.return_types(Foo19668, ()) == [Foo19668]
+
+# issue #27316 - inference shouldn't hang on these
+f27316(::Vector) = nothing
+f27316(::Any) = f27316(Any[][1]), f27316(Any[][1])
+@test Tuple{Nothing,Nothing} <: Base.return_types(f27316, Tuple{Int})[1] == Tuple{Union{Nothing, Tuple{Any,Any}},Union{Nothing, Tuple{Any,Any}}} # we may be able to improve this bound in the future
+function g27316()
+    x = nothing
+    while rand() < 0.5
+        x = (x,)
+    end
+    return x
+end
+@test Tuple{Tuple{Nothing}} <: Base.return_types(g27316, Tuple{})[1] == Any # we may be able to improve this bound in the future
+const R27316 = Tuple{Tuple{Vector{T}}} where T
+h27316_(x) = (x,)
+h27316_(x::Tuple{Vector}) = (Any[x][1],)::R27316 # a UnionAll of a Tuple, not vice versa!
+function h27316()
+    x = [1]
+    while rand() < 0.5
+        x = h27316_(x)
+    end
+    return x
+end
+@test Tuple{Tuple{Vector{Int}}} <: Base.return_types(h27316, Tuple{})[1] == Union{Vector{Int}, Tuple{Any}} # we may be able to improve this bound in the future
+
+# PR 27434, inference when splatting iterators with type-based state
+splat27434(x) = (x...,)
+struct Iterator27434
+    x::Int
+    y::Int
+    z::Int
+end
+Base.iterate(i::Iterator27434) = i.x, Val(1)
+Base.iterate(i::Iterator27434, ::Val{1}) = i.y, Val(2)
+Base.iterate(i::Iterator27434, ::Val{2}) = i.z, Val(3)
+Base.iterate(::Iterator27434, ::Any) = nothing
+@test @inferred splat27434(Iterator27434(1, 2, 3)) == (1, 2, 3)
+@test Core.Compiler.return_type(splat27434, Tuple{typeof(Iterators.repeated(1))}) == Union{}
+
+# issue #27078
+f27078(T::Type{S}) where {S} = isa(T, UnionAll) ? f27078(T.body) : T
+T27078 = Vector{Vector{T}} where T
+@test f27078(T27078) === T27078.body
+
+# issue #28070
+g28070(f, args...) = f(args...)
+@test @inferred g28070(Core._apply, Base.:/, (1.0, 1.0)) == 1.0
+
+# issue #28079
+struct Foo28079 end
+@inline h28079(x, args...) = g28079(x, args...)
+@inline g28079(::Any, f, args...) = f(args...)
+test28079(p, n, m) = h28079(Foo28079(), Base.pointerref, p, n, m)
+cinfo_unoptimized = code_typed(test28079, (Ptr{Float32}, Int, Int); optimize=false)[].first
+cinfo_optimized = code_typed(test28079, (Ptr{Float32}, Int, Int); optimize=true)[].first
+@test cinfo_unoptimized.ssavaluetypes[end-1] === cinfo_optimized.ssavaluetypes[end-1] === Float32

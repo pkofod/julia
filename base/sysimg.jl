@@ -137,8 +137,6 @@ include("array.jl")
 include("abstractarray.jl")
 include("subarray.jl")
 include("views.jl")
-include("reinterpretarray.jl")
-
 
 # ## dims-type-converting Array constructors for convenience
 # type and dimensionality specified, accepting dims as series of Integers
@@ -205,6 +203,7 @@ include("reduce.jl")
 
 ## core structures
 include("reshapedarray.jl")
+include("reinterpretarray.jl")
 include("bitarray.jl")
 include("bitset.jl")
 
@@ -223,6 +222,7 @@ include("set.jl")
 include("char.jl")
 include("strings/basic.jl")
 include("strings/string.jl")
+include("strings/substring.jl")
 
 # Definition of StridedArray
 StridedFastContiguousSubArray{T,N,A<:DenseArray} = FastContiguousSubArray{T,N,A}
@@ -333,12 +333,12 @@ using .Filesystem
 include("process.jl")
 include("grisu/grisu.jl")
 include("methodshow.jl")
+include("secretbuffer.jl")
 
 # core math functions
 include("floatfuncs.jl")
 include("math.jl")
 using .Math
-import .Math: gamma
 const (√)=sqrt
 const (∛)=cbrt
 
@@ -403,7 +403,6 @@ include("channels.jl")
 
 # utilities
 include("deepcopy.jl")
-include("clipboard.jl")
 include("download.jl")
 include("summarysize.jl")
 include("errorshow.jl")
@@ -413,9 +412,6 @@ include("stacktraces.jl")
 using .StackTraces
 
 include("initdefs.jl")
-
-# statistics
-include("statistics.jl")
 
 # worker threads
 include("threadcall.jl")
@@ -429,10 +425,8 @@ include("util.jl")
 
 creating_sysimg = true
 # set up depot & load paths to be able to find stdlib packages
-let BINDIR = Sys.BINDIR
-    init_depot_path(BINDIR)
-    init_load_path(BINDIR)
-end
+init_depot_path()
+init_load_path()
 
 include("asyncmap.jl")
 
@@ -464,12 +458,15 @@ function __init__()
     end
     # And try to prevent openblas from starting too many threads, unless/until specifically requested
     if !haskey(ENV, "OPENBLAS_NUM_THREADS") && !haskey(ENV, "OMP_NUM_THREADS")
-        cpu_cores = Sys.CPU_CORES::Int
-        if cpu_cores > 8 # always at most 8
+        cpu_threads = Sys.CPU_THREADS::Int
+        if cpu_threads > 8 # always at most 8
             ENV["OPENBLAS_NUM_THREADS"] = "8"
-        elseif haskey(ENV, "JULIA_CPU_CORES") # or exactly as specified
-            ENV["OPENBLAS_NUM_THREADS"] = cpu_cores
-        end # otherwise, trust that openblas will pick CPU_CORES anyways, without any intervention
+        elseif haskey(ENV, "JULIA_CPU_THREADS") # or exactly as specified
+            ENV["OPENBLAS_NUM_THREADS"] = cpu_threads
+        elseif haskey(ENV, "JULIA_CPU_CORES") # TODO: delete in 1.0 (deprecation)
+            Core.print("JULIA_CPU_CORES is deprecated, use JULIA_CPU_THREADS instead.\n")
+            ENV["OPENBLAS_NUM_THREADS"] = cpu_threads
+        end # otherwise, trust that openblas will pick CPU_THREADS anyways, without any intervention
     end
     # for the few uses of Libc.rand in Base:
     Libc.srand()
@@ -512,7 +509,6 @@ let
             :LibGit2,
             :Logging,
             :Sockets,
-
             :Printf,
             :Profile,
             :Dates,
@@ -520,16 +516,16 @@ let
             :Random,
             :UUIDs,
             :Future,
-            :Pkg,
+            :OldPkg,
             :LinearAlgebra,
-            :IterativeEigensolvers,
             :SparseArrays,
             :SuiteSparse,
-            :SharedArrays,
             :Distributed,
+            :SharedArrays,
+            :Pkg,
             :Test,
             :REPL,
-            :Pkg3,
+            :Statistics,
         ]
 
     maxlen = maximum(textwidth.(string.(stdlibs)))
@@ -537,10 +533,17 @@ let
     print_time = (mod, t) -> (print(rpad(string(mod) * "  ", maxlen + 3, "─")); Base.time_print(t * 10^9); println())
     print_time(Base, (Base.end_base_include - Base.start_base_include) * 10^(-9))
 
+    Base._track_dependencies[] = true
     Base.tot_time_stdlib[] = @elapsed for stdlib in stdlibs
         tt = @elapsed Base.require(Base, stdlib)
         print_time(stdlib, tt)
     end
+    for dep in Base._require_dependencies
+        dep[3] == 0.0 && continue
+        push!(Base._included_files, dep[1:2])
+    end
+    empty!(Base._require_dependencies)
+    Base._track_dependencies[] = false
 
     print_time("Stdlibs total", Base.tot_time_stdlib[])
 end
@@ -649,9 +652,6 @@ end
     @eval @deprecate_stdlib $(Symbol("@dateformat_str")) Dates true
     @deprecate_stdlib now Dates true
 
-    @deprecate_stdlib eigs IterativeEigensolvers true
-    @deprecate_stdlib svds IterativeEigensolvers true
-
     @eval @deprecate_stdlib $(Symbol("@printf")) Printf true
     @eval @deprecate_stdlib $(Symbol("@sprintf")) Printf true
 
@@ -747,7 +747,6 @@ end
     # @deprecate_stdlib kron        LinearAlgebra true
     @deprecate_stdlib ldltfact    LinearAlgebra true
     @deprecate_stdlib ldltfact!   LinearAlgebra true
-    @deprecate_stdlib linreg      LinearAlgebra true
     @deprecate_stdlib logabsdet   LinearAlgebra true
     @deprecate_stdlib logdet      LinearAlgebra true
     @deprecate_stdlib lu          LinearAlgebra true
@@ -867,6 +866,7 @@ end
     @deprecate_stdlib varinfo       InteractiveUtils true
     @deprecate_stdlib versioninfo   InteractiveUtils true
     @deprecate_stdlib peakflops     InteractiveUtils true
+    @deprecate_stdlib clipboard     InteractiveUtils true
     @eval @deprecate_stdlib $(Symbol("@which"))         InteractiveUtils true
     @eval @deprecate_stdlib $(Symbol("@edit"))          InteractiveUtils true
     @eval @deprecate_stdlib $(Symbol("@less"))          InteractiveUtils true
@@ -897,6 +897,19 @@ end
     @deprecate_stdlib TCPSocket      Sockets true
     @deprecate_stdlib UDPSocket      Sockets true
 
+    @deprecate_stdlib cor       Statistics true
+    @deprecate_stdlib cov       Statistics true
+    @deprecate_stdlib std       Statistics true
+    @deprecate_stdlib stdm      Statistics true
+    @deprecate_stdlib var       Statistics true
+    @deprecate_stdlib varm      Statistics true
+    @deprecate_stdlib mean!     Statistics true
+    @deprecate_stdlib mean      Statistics true
+    @deprecate_stdlib median!   Statistics true
+    @deprecate_stdlib median    Statistics true
+    @deprecate_stdlib middle    Statistics true
+    @deprecate_stdlib quantile! Statistics true
+    @deprecate_stdlib quantile  Statistics true
 end
 end
 

@@ -145,61 +145,6 @@ function version_slug(uuid::UUID, sha1::SHA1, p::Int=4)
     return slug(crc, p)
 end
 
-## load path expansion: turn LOAD_PATH entries into concrete paths ##
-
-function find_env(envs::Vector)
-    for env in envs
-        path = find_env(env)
-        path != nothing && return path
-    end
-end
-
-function find_env(env::AbstractString)
-    path = abspath(env)
-    if isdir(path)
-        # directory with a project file?
-        for name in project_names
-            file = abspath(path, name)
-            isfile_casesensitive(file) && return file
-        end
-    end
-    # package dir or path to project file
-    return path
-end
-
-function find_env(env::NamedEnv)
-    # look for named env in each depot
-    for depot in DEPOT_PATH
-        isdir(depot) || continue
-        file = nothing
-        for name in project_names
-            file = abspath(depot, "environments", env.name, name)
-            isfile_casesensitive(file) && return file
-        end
-        file != nothing && env.create && return file
-    end
-end
-
-function find_env(env::CurrentEnv, dir::AbstractString = pwd())
-    # look for project file in current dir and parents
-    home = homedir()
-    while true
-        for name in project_names
-            file = joinpath(dir, name)
-            isfile_casesensitive(file) && return file
-        end
-        # bail at home directory or top of git repo
-        (dir == home || ispath(joinpath(dir, ".git"))) && break
-        old, dir = dir, dirname(dir)
-        dir == old && break
-    end
-    env.create ? joinpath(pwd(), project_names[end]) : nothing
-end
-
-find_env(env::Function) = find_env(env())
-
-load_path() = String[env for env in map(find_env, LOAD_PATH) if env ≠ nothing]
-
 ## package identification: determine unique identity of package to be loaded ##
 
 find_package(args...) = locate_package(identify_package(args...))
@@ -503,7 +448,8 @@ function explicit_project_deps_get(project_file::String, name::String)::Union{Bo
                 if (m = match(re_key_to_string, line)) != nothing
                     m.captures[1] == name && return UUID(m.captures[2])
                 end
-            elseif occursin(re_section, line)
+            end
+            if occursin(re_section, line)
                 state = occursin(re_section_deps, line) ? :deps : :other
             end
         end
@@ -542,7 +488,7 @@ function explicit_manifest_deps_get(manifest_file::String, where::UUID, name::St
             end
         end
         uuid == where || return false
-        deps == nothing && return true
+        deps === nothing && return true
         # TODO: handle inline table syntax
         if deps[1] != '[' || deps[end] != ']'
             @warn "Unexpected TOML deps format:\n$deps"
@@ -550,7 +496,7 @@ function explicit_manifest_deps_get(manifest_file::String, where::UUID, name::St
         end
         occursin(repr(name), deps) || return true
         seekstart(io) # rewind IO handle
-        manifest_file_name_uuid(manifest_file, name, io)
+        return manifest_file_name_uuid(manifest_file, name, io)
     end
 end
 
@@ -733,7 +679,7 @@ function _require_search_from_serialized(pkg::PkgId, sourcepath::String)
             modpath, modkey, build_id = dep::Tuple{String, PkgId, UInt64}
             dep = _tryrequire_from_serialized(modkey, build_id, modpath)
             if dep === nothing
-                @debug "Required dependency $modname failed to load from cache file for $modpath."
+                @debug "Required dependency $modkey failed to load from cache file for $modpath."
                 staledeps = true
                 break
             end
@@ -841,6 +787,9 @@ end
 # require always works in Main scope and loads files from node 1
 const toplevel_load = Ref(true)
 
+const full_warning_showed = Ref(false)
+const modules_warned_for = Set{PkgId}()
+
 """
     require(module::Symbol)
 
@@ -855,16 +804,45 @@ current `include` path but does not use it to search for files (see help for `in
 This function is typically used to load library code, and is implicitly called by `using` to
 load packages.
 
-When searching for files, `require` first looks for package code under `Pkg.dir()`,
-then tries paths in the global array `LOAD_PATH`. `require` is case-sensitive on
-all platforms, including those with case-insensitive filesystems like macOS and
-Windows.
+When searching for files, `require` first looks for package code in the global array
+`LOAD_PATH`. `require` is case-sensitive on all platforms, including those with
+case-insensitive filesystems like macOS and Windows.
+
+For more details regarding code loading, see the manual.
 """
 function require(into::Module, mod::Symbol)
     uuidkey = identify_package(into, String(mod))
     # Core.println("require($(PkgId(into)), $mod) -> $uuidkey")
-    uuidkey === nothing &&
-        throw(ArgumentError("Module $mod not found in current path.\nRun `Pkg.add(\"$mod\")` to install the $mod package."))
+    if uuidkey === nothing
+        where = PkgId(into)
+        if where.uuid === nothing
+            throw(ArgumentError("""
+                Package $mod not found in current path:
+                - Run `Pkg.add($(repr(String(mod))))` to install the $mod package.
+                """))
+        else
+            s = """
+            Package $(where.name) does not have $mod in its dependencies:
+            - If you have $(where.name) checked out for development and have
+              added $mod as a dependency but haven't updated your primary
+              environment's manifest file, try `Pkg.resolve()`.
+            - Otherwise you may need to report an issue with $(where.name)"""
+
+            uuidkey = identify_package(PkgId(string(into)), String(mod))
+            uuidkey === nothing && throw(ArgumentError(s))
+
+            # fall back to toplevel loading with a warning
+            if !(where in modules_warned_for)
+                @warn string(
+                    full_warning_showed[] ? "" : s, "\n",
+                    string("Loading $(mod) into $(where.name) from project dependency, ",
+                           "future warnings for $(where.name) are suppressed.")
+                ) _module = nothing _file = nothing
+                push!(modules_warned_for, where)
+            end
+            full_warning_showed[] = true
+        end
+    end
     if _track_dependencies[]
         push!(_require_dependencies, (into, binpack(uuidkey), 0.0))
     end
@@ -945,7 +923,10 @@ function _require(pkg::PkgId)
         name = pkg.name
         path = locate_package(pkg)
         if path === nothing
-            throw(ArgumentError("Module $name not found in current path.\nRun `Pkg.add(\"$name\")` to install the $name package."))
+            throw(ArgumentError("""
+                Package $pkg is required but does not seem to be installed:
+                 - Run `Pkg.instantiate()` to install all recorded dependencies.
+                """))
         end
 
         # attempt to load the module file via the precompile cache locations
@@ -1107,6 +1088,25 @@ function evalfile(path::AbstractString, args::Vector{String}=String[])
 end
 evalfile(path::AbstractString, args::Vector) = evalfile(path, String[args...])
 
+function load_path_setup_code(load_path::Bool=true)
+    code = """
+    append!(empty!(Base.DEPOT_PATH), $(repr(map(abspath, DEPOT_PATH))))
+    append!(empty!(Base.DL_LOAD_PATH), $(repr(map(abspath, DL_LOAD_PATH))))
+    """
+    if load_path
+        load_path = map(abspath, Base.load_path())
+        path_sep = Sys.iswindows() ? ';' : ':'
+        any(path -> path_sep in path, load_path) &&
+            error("LOAD_PATH entries cannot contain $(repr(path_sep))")
+        code *= """
+        append!(empty!(Base.LOAD_PATH), $(repr(load_path)))
+        ENV["JULIA_LOAD_PATH"] = $(repr(join(load_path, Sys.iswindows() ? ';' : ':')))
+        Base.HOME_PROJECT[] = Base.ACTIVE_PROJECT[] = nothing
+        """
+    end
+    return code
+end
+
 function create_expr_cache(input::String, output::String, concrete_deps::typeof(_concrete_dependencies), uuid::Union{Nothing,UUID})
     rm(output, force=true)   # Remove file if it exists
     code_object = """
@@ -1125,13 +1125,7 @@ function create_expr_cache(input::String, output::String, concrete_deps::typeof(
     try
         write(in, """
         begin
-        import Pkg
-        empty!(Base.LOAD_PATH)
-        append!(Base.LOAD_PATH, $(repr(LOAD_PATH, context=:module=>nothing)))
-        empty!(Base.DEPOT_PATH)
-        append!(Base.DEPOT_PATH, $(repr(DEPOT_PATH)))
-        empty!(Base.DL_LOAD_PATH)
-        append!(Base.DL_LOAD_PATH, $(repr(DL_LOAD_PATH)))
+        $(Base.load_path_setup_code())
         Base._track_dependencies[] = true
         empty!(Base._concrete_dependencies)
         """)
@@ -1159,7 +1153,7 @@ function create_expr_cache(input::String, output::String, concrete_deps::typeof(
         close(in)
     catch ex
         close(in)
-        process_running(io) && Timer(t -> kill(io), interval = 5.0) # wait a short time before killing the process to give it a chance to clean up on its own first
+        process_running(io) && Timer(t -> kill(io), 5.0) # wait a short time before killing the process to give it a chance to clean up on its own first
         rethrow(ex)
     end
     return io
@@ -1177,7 +1171,7 @@ function compilecache(pkg::PkgId)
     # decide where to get the source file from
     name = pkg.name
     path = locate_package(pkg)
-    path === nothing && throw(ArgumentError("$name not found in path"))
+    path === nothing && throw(ArgumentError("$pkg not found during precompilation"))
     # decide where to put the resulting cache file
     cachefile = abspath(DEPOT_PATH[1], cache_file_entry(pkg))
     cachepath = dirname(cachefile)
@@ -1335,7 +1329,7 @@ function stale_cachefile(modpath::String, cachefile::String)
         (modules, (includes, requires), required_modules) = parse_cache_header(io)
         modules = Dict{PkgId, UInt64}(modules)
 
-        # Check if transitive dependencies can be fullfilled
+        # Check if transitive dependencies can be fulfilled
         ndeps = length(required_modules)
         depmods = Vector{Any}(undef, ndeps)
         for i in 1:ndeps
@@ -1413,9 +1407,9 @@ end
 """
     @__FILE__ -> AbstractString
 
-`@__FILE__` expands to a string with the path to the file containing the
+Expand to a string with the path to the file containing the
 macrocall, or an empty string if evaluated by `julia -e <expr>`.
-Returns `nothing` if the macro was missing parser source information.
+Return `nothing` if the macro was missing parser source information.
 Alternatively see [`PROGRAM_FILE`](@ref).
 """
 macro __FILE__()
@@ -1426,9 +1420,9 @@ end
 """
     @__DIR__ -> AbstractString
 
-`@__DIR__` expands to a string with the absolute path to the directory of the file
+Expand to a string with the absolute path to the directory of the file
 containing the macrocall.
-Returns the current working directory if run from a REPL or if evaluated by `julia -e <expr>`.
+Return the current working directory if run from a REPL or if evaluated by `julia -e <expr>`.
 """
 macro __DIR__()
     __source__.file === nothing && return nothing

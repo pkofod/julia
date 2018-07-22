@@ -59,7 +59,7 @@ import LinearAlgebra
 cd(dirname(@__FILE__)) do
     n = 1
     if net_on
-        n = min(Sys.CPU_CORES, length(tests))
+        n = min(Sys.CPU_THREADS, length(tests))
         n > 1 && addprocs_with_testenv(n)
         LinearAlgebra.BLAS.set_num_threads(1)
     end
@@ -192,7 +192,7 @@ cd(dirname(@__FILE__)) do
         isa(e, InterruptException) || rethrow(e)
         # If the test suite was merely interrupted, still print the
         # summary, which can be useful to diagnose what's going on
-        foreach(task->try; schedule(task, InterruptException(); error=true); end, all_tasks)
+        foreach(task->try; schedule(task, InterruptException(); error=true); catch; end, all_tasks)
         foreach(wait, all_tasks)
     finally
         if isa(stdin, Base.TTY)

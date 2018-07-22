@@ -24,7 +24,7 @@ export @testset
 export @inferred
 export detect_ambiguities, detect_unbound_args
 export GenericString, GenericSet, GenericDict, GenericArray
-export guardsrand, TestSetException
+export TestSetException
 
 import Distributed: myid
 
@@ -101,7 +101,7 @@ end
 function Base.show(io::IO, t::Fail)
     printstyled(io, "Test Failed"; bold=true, color=Base.error_color())
     print(io, " at ")
-    printstyled(io, t.source.file, ":", t.source.line, "\n"; bold=true, color=:default)
+    printstyled(io, something(t.source.file, :none), ":", t.source.line, "\n"; bold=true, color=:default)
     print(io, "  Expression: ", t.orig_expr)
     if t.test_type == :test_throws_wrong
         # An exception was thrown, but it was of the wrong type
@@ -152,7 +152,7 @@ function Base.show(io::IO, t::Error)
     end
     printstyled(io, "Error During Test"; bold=true, color=Base.error_color())
     print(io, " at ")
-    printstyled(io, t.source.file, ":", t.source.line, "\n"; bold=true, color=:default)
+    printstyled(io, something(t.source.file, :none), ":", t.source.line, "\n"; bold=true, color=:default)
     if t.test_type == :test_nonbool
         println(io, "  Expression evaluated to non-Boolean")
         println(io, "  Expression: ", t.orig_expr)
@@ -524,6 +524,7 @@ Test Passed
 julia> @test_throws DimensionMismatch [1, 2, 3] + [1, 2]
 Test Passed
       Thrown: DimensionMismatch
+```
 """
 macro test_throws(extype, ex)
     orig_ex = Expr(:inert, ex)
@@ -1248,7 +1249,7 @@ end
 """
     get_testset_depth()
 
-Returns the number of active test sets, not including the defaut test set
+Returns the number of active test sets, not including the default test set
 """
 function get_testset_depth()
     testsets = get(task_local_storage(), :__BASETESTNEXT__, AbstractTestSet[])
@@ -1274,22 +1275,11 @@ julia> typeof(f(1,2,3))
 Int64
 
 julia> @code_warntype f(1,2,3)
-Variables:
-  a<optimized out>
-  b::Int64
-  c<optimized out>
-
-Body:
-  begin
-      # meta: location operators.jl > 279
-      # meta: location int.jl < 49
-      Core.SSAValue(2) = (Base.slt_int)(1, b::Int64)::Bool
-      # meta: pop locations (2)
-      unless Core.SSAValue(2) goto 7
-      return 1
-      7:
-      return 1.0
-  end::UNION{FLOAT64, INT64}
+Body::UNION{FLOAT64, INT64}
+1 1 ─ %1 = Base.slt_int(1, %%b)::Bool
+  └──      goto 3 if not %1
+  2 ─      return 1
+  3 ─      return 1.0
 
 julia> @inferred f(1,2,3)
 ERROR: return type Int64 does not match inferred return type Union{Float64, Int64}
@@ -1522,8 +1512,7 @@ struct GenericDict{K,V} <: AbstractDict{K,V}
     s::AbstractDict{K,V}
 end
 
-for (G, A) in ((GenericSet, AbstractSet),
-               (GenericDict, AbstractDict))
+for G in (GenericSet, GenericDict)
     @eval begin
         Base.iterate(s::$G, state...) = iterate(s.s, state...)
     end

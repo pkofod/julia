@@ -410,6 +410,7 @@ void JuliaOJIT::DebugObjectRegistrar::registerObject(RTDyldObjHandleT H, const O
         NotifyGDB(SavedObject);
     }
 
+    JIT.NotifyFinalizer(*Object, *LO);
     SavedObjects.push_back(std::move(SavedObject));
 
     ORCNotifyObjectEmitted(JuliaListener.get(), *Object,
@@ -681,7 +682,16 @@ Function *JuliaOJIT::FindFunctionNamed(const std::string &Name)
 
 void JuliaOJIT::RegisterJITEventListener(JITEventListener *L)
 {
-    // TODO
+    if (!L)
+        return;
+    EventListeners.push_back(L);
+}
+
+void JuliaOJIT::NotifyFinalizer(const object::ObjectFile &Obj,
+                                const RuntimeDyld::LoadedObjectInfo &LoadedObjectInfo)
+{
+    for (auto &Listener : EventListeners)
+        Listener->NotifyObjectEmitted(Obj, LoadedObjectInfo);
 }
 
 const DataLayout& JuliaOJIT::getDataLayout() const
@@ -1184,6 +1194,11 @@ void jl_dump_native(const char *bc_fname, const char *unopt_bc_fname, const char
     };
 
     add_output(*shadow_output, "unopt.bc", "text.bc", "text.o");
+    // save some memory, by deleting all of the function bodies
+    for (auto &F : shadow_output->functions()) {
+        if (!F.isDeclaration())
+            F.deleteBody();
+    }
 
     LLVMContext &Context = shadow_output->getContext();
     std::unique_ptr<Module> sysimage(new Module("sysimage", Context));

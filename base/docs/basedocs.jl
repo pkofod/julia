@@ -2,10 +2,14 @@
 
 module BaseDocs
 
+@nospecialize # don't specialize on any arguments of the methods declared herein
+
 struct Keyword
-    name :: Symbol
+    name::Symbol
 end
-macro kw_str(text) Keyword(Symbol(text)) end
+macro kw_str(text)
+    return Keyword(Symbol(text))
+end
 
 """
 **Welcome to Julia $(string(VERSION)).** The full manual is available at
@@ -70,7 +74,7 @@ kw"abstract type"
 """
     module
 
-`module` declares a Module, which is a separate global variable workspace. Within a
+`module` declares a `Module`, which is a separate global variable workspace. Within a
 module, you can control which names from other modules are visible (via importing), and
 specify which of your names are intended to be public (via exporting).
 Modules allow you to create top-level definitions without worrying about name conflicts
@@ -146,6 +150,7 @@ kw"macro"
     local
 
 `local` introduces a new local variable.
+See the [manual section on variable scoping](@ref scope-of-variables) for more information.
 
 # Examples
 ```jldoctest
@@ -170,6 +175,7 @@ kw"local"
 
 `global x` makes `x` in the current scope and its inner scopes refer to the global
 variable of that name.
+See the [manual section on variable scoping](@ref scope-of-variables) for more information.
 
 # Examples
 ```jldoctest
@@ -430,7 +436,8 @@ kw"while"
     end
 
 `end` marks the conclusion of a block of expressions, for example
-`module`, `struct`, `mutable struct`, `begin`, `let`, `for` etc.
+[`module`](@ref), [`struct`](@ref), [`mutable struct`](@ref),
+[`begin`](@ref), [`let`](@ref), [`for`](@ref) etc.
 `end` may also be used when indexing into an array to represent
 the last index of a dimension.
 
@@ -466,8 +473,7 @@ end
 
 `try`/`catch` statements also allow the `Exception` to be saved in a variable, e.g. `catch y`.
 
-The `catch` clause is not strictly necessary; when omitted, the default return value is
-`nothing`. The power of the `try`/`catch` construct lies in the ability to unwind a deeply
+The power of the `try`/`catch` construct lies in the ability to unwind a deeply
 nested computation immediately to a much higher level in the stack of calling functions.
 """
 kw"try", kw"catch"
@@ -640,9 +646,9 @@ variable or expression.
 
 Each `argvalue` to the `ccall` will be converted to the corresponding
 `argtype`, by automatic insertion of calls to `unsafe_convert(argtype,
-cconvert(argtype, argvalue))`. (See also the documentation for each of these
-functions for further details.) In most cases, this simply results in a call to
-`convert(argtype, argvalue)`.
+cconvert(argtype, argvalue))`. (See also the documentation for
+[`unsafe_convert`](@ref Base.unsafe_convert) and [`cconvert`](@ref Base.cconvert) for further details.)
+In most cases, this simply results in a call to `convert(argtype, argvalue)`.
 """
 kw"ccall"
 
@@ -662,9 +668,9 @@ variable or expression.
 
 Each `ArgumentValue` to `llvmcall` will be converted to the corresponding
 `ArgumentType`, by automatic insertion of calls to `unsafe_convert(ArgumentType,
-cconvert(ArgumentType, ArgumentValue))`. (see also the documentation for each of these
-functions for further details). In most cases, this simply results in a call to
-`convert(ArgumentType, ArgumentValue)`.
+cconvert(ArgumentType, ArgumentValue))`. (See also the documentation for
+[`unsafe_convert`](@ref Base.unsafe_convert) and [`cconvert`](@ref Base.cconvert) for further details.)
+In most cases, this simply results in a call to `convert(ArgumentType, ArgumentValue)`.
 
 See `test/llvmcall.jl` for usage examples.
 """
@@ -682,7 +688,7 @@ begin
 end
 ```
 
-Usually `begin` will not be necessary, since keywords such as `function` and `let`
+Usually `begin` will not be necessary, since keywords such as [`function`](@ref) and [`let`](@ref)
 implicitly begin blocks of code. See also [`;`](@ref).
 """
 kw"begin"
@@ -719,7 +725,7 @@ end
 ```
 
 `struct`s are immutable by default; an instance of one of these types cannot
-be modified after construction. Use `mutable struct` instead to declare a
+be modified after construction. Use [`mutable struct`](@ref) instead to declare a
 type whose instances can be modified.
 
 See the manual section on [Composite Types](@ref) for more details,
@@ -749,7 +755,7 @@ kw"new"
     where
 
 The `where` keyword creates a type that is an iterated union of other types, over all
-values of some variable. For example `Vector{T} where T<:Real` includes all `Vector`s
+values of some variable. For example `Vector{T} where T<:Real` includes all [`Vector`](@ref)s
 where the element type is some kind of `Real` number.
 
 The variable bound defaults to `Any` if it is omitted:
@@ -812,7 +818,7 @@ Nothing
 """
     nothing
 
-The singleton instance of type `Nothing`, used by convention when there is no value to return
+The singleton instance of type [`Nothing`](@ref), used by convention when there is no value to return
 (as in a C `void` function) or when a variable or field holds no value.
 """
 nothing
@@ -853,6 +859,14 @@ ReadOnlyMemoryError
     ErrorException(msg)
 
 Generic error type. The error message, in the `.msg` field, may provide more specific details.
+
+# Example
+```jldoctest
+julia> ex = ErrorException("I've done a bad thing");
+
+julia> ex.msg
+"I've done a bad thing"
+```
 """
 ErrorException
 
@@ -1011,6 +1025,29 @@ StackOverflowError
     nfields(x) -> Int
 
 Get the number of fields in the given object.
+
+# Examples
+```jldoctest
+julia> a = 1//2;
+
+julia> nfields(a)
+2
+
+julia> b = 1
+1
+
+julia> nfields(b)
+0
+
+julia> ex = ErrorException("I've done a bad thing");
+
+julia> nfields(ex)
+1
+```
+
+In these examples, `a` is a [`Rational`](@ref), which has two fields.
+`b` is an `Int`, which is a primitive bitstype with no fields at all.
+`ex` is an [`ErrorException`](@ref), which has one field.
 """
 nfields
 
@@ -1018,6 +1055,17 @@ nfields
     UndefVarError(var::Symbol)
 
 A symbol in the current scope is not defined.
+
+# Examples
+```jldoctest
+julia> a
+ERROR: UndefVarError: a not defined
+
+julia> a = 1;
+
+julia> a
+1
+```
 """
 UndefVarError
 
@@ -1295,6 +1343,19 @@ setfield!
     typeof(x)
 
 Get the concrete type of `x`.
+
+# Examples
+```jldoctest
+julia> a = 1//2;
+
+julia> typeof(a)
+Rational{Int64}
+
+julia> M = [1 2; 3.5 4];
+
+julia> typeof(M)
+Array{Float64,2}
+```
 """
 typeof
 
@@ -1305,6 +1366,29 @@ typeof
 
 Tests whether an assignable location is defined. The arguments can be a module and a symbol
 or a composite object and field name (as a symbol) or index.
+
+# Examples
+```jldoctest
+julia> isdefined(Base, :sum)
+true
+
+julia> isdefined(Base, :NonExistentMethod)
+false
+
+julia> a = 1//2;
+
+julia> isdefined(a, 2)
+true
+
+julia> isdefined(a, 3)
+false
+
+julia> isdefined(a, :num)
+true
+
+julia> isdefined(a, :numerator)
+false
+```
 """
 isdefined
 
@@ -1627,13 +1711,21 @@ MethodError
 
 The asserted condition did not evaluate to `true`.
 Optional argument `msg` is a descriptive error string.
+
+# Examples
+```jldoctest
+julia> @assert false "this is not true"
+ERROR: AssertionError: this is not true
+```
+
+`AssertionError` is usually thrown from [`@assert`](@ref).
 """
 AssertionError
 
 """
     LoadError(file::AbstractString, line::Int, error)
 
-An error occurred while `include`ing, `require`ing, or `using` a file. The error specifics
+An error occurred while `include`ing, `require`ing, or [`using`](@ref) a file. The error specifics
 should be available in the `.error` field.
 """
 LoadError

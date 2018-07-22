@@ -39,7 +39,7 @@ julia> vec(1:3)
 
 See also [`reshape`](@ref).
 """
-vec(a::AbstractArray) = reshape(a,_length(a))
+vec(a::AbstractArray) = reshape(a,length(a))
 vec(a::AbstractVector) = a
 
 _sub(::Tuple{}, ::Tuple{}) = ()

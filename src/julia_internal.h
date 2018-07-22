@@ -446,6 +446,7 @@ jl_value_t *jl_interpret_toplevel_expr_in(jl_module_t *m, jl_value_t *e,
                                           jl_svec_t *sparam_vals);
 int jl_is_toplevel_only_expr(jl_value_t *e);
 jl_value_t *jl_call_scm_on_ast(const char *funcname, jl_value_t *expr, jl_module_t *inmodule);
+void jl_linenumber_to_lineinfo(jl_code_info_t *ci, jl_module_t *mod, jl_sym_t *name);
 
 jl_method_instance_t *jl_method_lookup(jl_methtable_t *mt JL_PROPAGATES_ROOT,
     jl_value_t **args, size_t nargs, int cache, size_t world);
@@ -471,6 +472,9 @@ extern char jl_using_intel_jitevents;
 #endif
 #ifdef JL_USE_OPROFILE_JITEVENTS
 extern char jl_using_oprofile_jitevents;
+#endif
+#ifdef JL_USE_PERF_JITEVENTS
+extern char jl_using_perf_jitevents;
 #endif
 extern size_t jl_arr_xtralloc_limit;
 
@@ -569,7 +573,7 @@ int32_t jl_assign_functionID(const char *fname);
 JL_DLLEXPORT jl_array_t *jl_idtable_rehash(jl_array_t *a, size_t newsz);
 
 JL_DLLEXPORT jl_methtable_t *jl_new_method_table(jl_sym_t *name, jl_module_t *module);
-jl_method_instance_t *jl_get_specialization1(jl_tupletype_t *types, size_t world);
+jl_method_instance_t *jl_get_specialization1(jl_tupletype_t *types, size_t world, int mt_cache);
 JL_DLLEXPORT int jl_has_call_ambiguities(jl_value_t *types, jl_method_t *m);
 jl_method_instance_t *jl_get_specialized(jl_method_t *m, jl_value_t *types, jl_svec_t *sp);
 int jl_is_rettype_inferred(jl_method_instance_t *li);
@@ -966,12 +970,12 @@ extern jl_sym_t *inline_sym;  extern jl_sym_t *noinline_sym;
 extern jl_sym_t *polly_sym;
 extern jl_sym_t *propagate_inbounds_sym;
 extern jl_sym_t *isdefined_sym;
-extern jl_sym_t *nospecialize_sym;
+extern jl_sym_t *nospecialize_sym; extern jl_sym_t *specialize_sym;
 extern jl_sym_t *boundscheck_sym;
 extern jl_sym_t *gc_preserve_begin_sym; extern jl_sym_t *gc_preserve_end_sym;
-extern jl_sym_t *generated_sym;
-extern jl_sym_t *generated_only_sym;
+extern jl_sym_t *generated_sym; extern jl_sym_t *generated_only_sym;
 extern jl_sym_t *throw_undef_if_not_sym;
+extern jl_sym_t *getfield_undefref_sym;
 
 struct _jl_sysimg_fptrs_t;
 

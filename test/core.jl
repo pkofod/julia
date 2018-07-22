@@ -770,6 +770,7 @@ begin
             global try_finally_glo_after = 1
         end
         global gothere = 1
+    catch
     end
     @test try_finally_loc_after == 0
     @test try_finally_glo_after == 1
@@ -799,7 +800,7 @@ begin
     @test retfinally() == 5
     @test glo == 18
 
-    @test try error() end === nothing
+    @test try error(); catch; end === nothing
 end
 
 # issue #12806
@@ -1270,6 +1271,7 @@ let
     function f()
         try
             return 1
+        catch
         end
     end
     @test f() == 1
@@ -1658,6 +1660,7 @@ try
     (function() end)(1)
     # should throw an argument count error
     @test false
+catch
 end
 
 # issue #4526
@@ -1881,6 +1884,7 @@ try
     # try running this code in a different context that triggers the codegen
     # assertion `assert(isboxed || v.typ == typ)`.
     f5142()
+catch
 end
 
 primitive type Int5142b 8 end
@@ -2282,6 +2286,7 @@ let
     # This can throw an error, but shouldn't segfault
     try
         issue7897!(sa, zeros(10))
+    catch
     end
 end
 
@@ -2605,6 +2610,7 @@ try
     mutable struct Foo{T}
         val::Bar{T}
     end
+catch
 end
 GC.gc()
 redirect_stdout(OLD_STDOUT)
@@ -3758,7 +3764,7 @@ let
 end
 
 # issue #14323
-@test_throws ErrorException eval(Expr(:body, :(1)))
+@test eval(Expr(:body, :(1))) === 1
 
 # issue #14339
 f14339(x::T, y::T) where {T<:Union{}} = 0
@@ -5975,6 +5981,13 @@ for U in unboxedunions
     end
 end
 
+# issue #27767
+let A=Vector{Union{Int, Missing}}(undef, 1)
+    resize!(A, 2)
+    @test length(A) == 2
+    @test A[2] === missing
+end
+
 end # module UnionOptimizations
 
 # issue #6614, argument destructuring
@@ -6051,6 +6064,9 @@ g25907b(x) = x[1]::Complex
 
 #issue #26363
 @test eltype(Ref(Float64(1))) === Float64
+@test ndims(Ref(1)) === 0
+@test collect(Ref(1)) == [v for v in Ref(1)] == fill(1)
+@test axes(Ref(1)) === size(Ref(1)) === ()
 
 # issue #23206
 g1_23206(::Tuple{Type{Int}, T}) where T = 0
@@ -6103,3 +6119,183 @@ g27103() = @isdefined z27103
 @test g27103() == false
 z27103 = 1
 @test g27103() == true
+
+# Issue 27181
+struct A27181
+    typ::Type
+end
+
+struct C27181
+    val
+end
+
+function f27181()
+    invoke(A27181(C27181).typ, Tuple{Any}, nothing)
+end
+@test f27181() == C27181(nothing)
+
+# Issue #27204
+struct Foo27204{T}
+end
+(::Foo27204{Int})() = 1
+(::Foo27204{Float64})() = 2
+@noinline f27204(x) = x ? Foo27204{Int}() : Foo27204{Float64}()
+foo27204(x) = f27204(x)()
+@test foo27204(true) == 1
+@test foo27204(false) == 2
+
+# Issue 27209
+@noinline function f27209(x::Union{Float64, Nothing})
+    if x === nothing
+        y = x; return @isdefined(y)
+    else
+        return @isdefined(y)
+    end
+end
+g27209(x) = f27209(x ? nothing : 1.0)
+@test g27209(true) == true
+
+# Issue 27240
+@inline function foo27240()
+    if rand(Bool)
+        return foo_nonexistant_27240
+    else
+        return bar_nonexistant_27240
+    end
+end
+bar27240() = foo27240()
+@test_throws UndefVarError bar27240()
+
+# issue #27269
+struct T27269{X, Y <: Vector{X}}
+    v::Vector{Y}
+end
+@test T27269([[1]]) isa T27269{Int, Vector{Int}}
+
+# issue #27368
+struct Combinator27368
+    op
+    args::Vector{Any}
+    Combinator27368(op, args...) =
+        new(op, collect(Any, args))
+end
+field27368(name) =
+    Combinator27368(field27368, name)
+translate27368(name::Symbol) =
+    translate27368(Val{name})
+translate27368(::Type{Val{name}}) where {name} =
+    field27368(name)
+@test isa(translate27368(:name), Combinator27368)
+
+# issue #27456
+@inline foo27456() = try baz_nonexistent27456(); catch; nothing; end
+bar27456() = foo27456()
+@test bar27456() == nothing
+
+# issue #27365
+mutable struct foo27365
+    x::Float64
+    foo27365() = new()
+end
+
+function baz27365()
+    data = foo27365()
+    return data.x
+end
+
+@test isa(baz27365(), Float64)
+
+# Issue #27566
+function test27566(a,b)
+    c = (b,(0,1)...)
+    test27566(a, c...)
+end
+test27566(a, b, c, d) = a.*(b, c, d)
+@test test27566(1,1) == (1,0,1)
+
+# Issue #27594
+struct Iter27594 end
+Base.iterate(::Iter27594) = (1, nothing)
+Base.iterate(::Iter27594, ::Any) = nothing
+
+function foo27594()
+    ind = 0
+    for x in (1,)
+        for y in Iter27594()
+            ind += 1
+        end
+    end
+    ind
+end
+
+@test foo27594() == 1
+
+# Issue 27597
+function f27597(y)
+    x = Int[]
+
+    if isempty(y)
+        y = 1:length(x)
+    elseif false
+        ;
+    end
+
+    length(y)
+    return y
+end
+@test f27597([1]) == [1]
+@test f27597([]) == 1:0
+
+# issue #22291
+wrap22291(ind) = (ind...,)
+@test @inferred(wrap22291(1)) == (1,)
+@test @inferred(wrap22291((1, 2))) == (1, 2)
+
+# Issue 27770
+mutable struct Handle27770
+    ptr::Ptr{Cvoid}
+end
+Handle27770() = Handle27770(Ptr{Cvoid}(UInt(0xfeedface)))
+
+struct Nullable27770
+    hasvalue::Bool
+    value::Handle27770
+    Nullable27770() = new(false)
+    Nullable27770(v::Handle27770) = new(true, Handle27770)
+end
+get27770(n::Nullable27770, v::Handle27770) = n.hasvalue ? n.value : v
+
+foo27770() = get27770(Nullable27770(), Handle27770())
+@test foo27770().ptr == Ptr{Cvoid}(UInt(0xfeedface))
+
+bar27770() = Nullable27770().value
+@test_throws UndefRefError bar27770()
+
+# Issue 27910
+f27910() = ((),)[2]
+@test_throws BoundsError f27910()
+
+# Issue 9765
+f9765(::Bool) = 1
+g9765() = f9765(isa(1, 1))
+@test_throws TypeError g9765()
+
+# Issue 28102
+struct HasPlain28102
+    plain::Int
+    HasPlain28102() = new()
+end
+@noinline function bam28102()
+    x = HasPlain28102()
+    if isdefined(x,:plain)
+        x.plain
+    end
+end
+@test isa(bam28102(), Int)
+
+# Check that the tfunc for fieldtype is correct
+struct FooFieldType; x::Int; end
+f_fieldtype(b) = fieldtype(b ? Int : FooFieldType, 1)
+
+@test @inferred(f_fieldtype(false)) == Int
+@test_throws BoundsError f_fieldtype(true)

@@ -15,7 +15,7 @@ color_normal = text_colors[:normal]
 function repl_color(key, default)
     env_str = get(ENV, key, "")
     c = tryparse(Int, env_str)
-    c_conv = coalesce(c, Symbol(env_str))
+    c_conv = something(c, Symbol(env_str))
     haskey(text_colors, c_conv) ? c_conv : default
 end
 
@@ -33,6 +33,9 @@ stackframe_function_color() = repl_color("JULIA_STACKFRAME_FUNCTION_COLOR", :bol
 function repl_cmd(cmd, out)
     shell = shell_split(get(ENV, "JULIA_SHELL", get(ENV, "SHELL", "/bin/sh")))
     shell_name = Base.basename(shell[1])
+
+    # Immediately expand all arguments, so that typing e.g. ~/bin/foo works.
+    cmd.exec .= expanduser.(cmd.exec)
 
     if isempty(cmd.exec)
         throw(ArgumentError("no cmd to execute"))
@@ -118,7 +121,7 @@ function eval_user_input(@nospecialize(ast), show_value::Bool)
             else
                 ast = Meta.lower(Main, ast)
                 value = Core.eval(Main, ast)
-                Core.eval(Main, Expr(:body, Expr(:(=), :ans, QuoteNode(value)), Expr(:return, nothing)))
+                ccall(:jl_set_global, Cvoid, (Any, Any, Any), Main, :ans, value)
                 if !(value === nothing) && show_value
                     if have_color
                         print(answer_color())
@@ -329,8 +332,16 @@ function run_main_repl(interactive::Bool, quiet::Bool, banner::Bool, history_fil
                 Core.eval(Main, :(using .InteractiveUtils))
             end
         catch ex
-            @warn "Failed to insert InteractiveUtils into module Main" exception=(ex, catch_backtrace())
+            @warn "Failed to import InteractiveUtils into module Main" exception=(ex, catch_backtrace())
         end
+    end
+    try
+        let Pkg = require(PkgId(UUID(0x44cfe95a_1eb2_52ea_b672_e2afdf69b78f), "Pkg"))
+            Core.eval(Main, :(const Pkg = $Pkg))
+            Core.eval(Main, :(using .Pkg))
+        end
+    catch ex
+        @warn "Failed to import Pkg into module Main" exception=(ex, catch_backtrace())
     end
 
     if interactive && isassigned(REPL_MODULE_REF)
@@ -338,7 +349,7 @@ function run_main_repl(interactive::Bool, quiet::Bool, banner::Bool, history_fil
             term_env = get(ENV, "TERM", @static Sys.iswindows() ? "" : "dumb")
             term = REPL.Terminals.TTYTerminal(term_env, stdin, stdout, stderr)
             color_set || (global have_color = REPL.Terminals.hascolor(term))
-            banner && REPL.banner(term, term)
+            banner && Base.banner(term)
             if term.term_type == "dumb"
                 active_repl = REPL.BasicREPL(term)
                 quiet || @warn "Terminal not fully functional"
