@@ -162,21 +162,26 @@ function beep(s::PromptState, duration::Real=options(s).beep_duration,
     s.beeping = min(s.beeping + duration, maxduration)
     @async begin
         trylock(s.refresh_lock) || return
-        orig_prefix = s.p.prompt_prefix
-        colors = Base.copymutable(colors)
-        use_current && push!(colors, orig_prefix)
-        i = 0
-        while s.beeping > 0.0
-            prefix = colors[mod1(i+=1, end)]
-            s.p.prompt_prefix = prefix
+        try
+            orig_prefix = s.p.prompt_prefix
+            colors = Base.copymutable(colors)
+            use_current && push!(colors, prompt_string(orig_prefix))
+            i = 0
+            while s.beeping > 0.0
+                prefix = colors[mod1(i+=1, end)]
+                s.p.prompt_prefix = prefix
+                refresh_multi_line(s, beeping=true)
+                sleep(blink)
+                s.beeping -= blink
+            end
+            s.p.prompt_prefix = orig_prefix
             refresh_multi_line(s, beeping=true)
-            sleep(blink)
-            s.beeping -= blink
+            s.beeping = 0.0
+        catch e
+            Base.showerror(stdout, e, catch_backtrace())
+        finally
+            unlock(s.refresh_lock)
         end
-        s.p.prompt_prefix = orig_prefix
-        refresh_multi_line(s, beeping=true)
-        s.beeping = 0.0
-        unlock(s.refresh_lock)
     end
     nothing
 end
@@ -741,7 +746,7 @@ _notspace(c) = c != _space
 
 beginofline(buf, pos=position(buf)) = something(findprev(isequal(_newline), buf.data, pos), 0)
 
-function lastindexline(buf, pos=position(buf))
+function endofline(buf, pos=position(buf))
     eol = findnext(isequal(_newline), buf.data[pos+1:buf.size], 1)
     eol === nothing ? buf.size : pos + eol - 1
 end
@@ -896,7 +901,7 @@ function edit_kill_line(s::MIState, backwards::Bool=false)
     else
         set_action!(s, :edit_kill_line_forwards)
         pos = position(buf)
-        endpos = lastindexline(buf)
+        endpos = endofline(buf)
         endpos == pos && buf.size > pos && (endpos += 1)
     end
     push_undo(s)
@@ -991,7 +996,7 @@ function edit_transpose_lines_up!(buf::IOBuffer, reg::Region)
     line1 = edit_splice!(buf, b1 => b2) # delete whole previous line
     line1 = '\n'*line1[1:end-1] # don't include the final '\n'
     pos = position(buf) # save pos in case it's at the end of line
-    b = lastindexline(buf, last(reg) - b2 + b1) # b2-b1 is the size of the removed line1
+    b = endofline(buf, last(reg) - b2 + b1) # b2-b1 is the size of the removed line1
     edit_splice!(buf, b => b, line1)
     seek(buf, pos)
     return true
@@ -999,9 +1004,9 @@ end
 
 # swap all lines intersecting the region with line below
 function edit_transpose_lines_down!(buf::IOBuffer, reg::Region)
-    e1 = lastindexline(buf, last(reg))
+    e1 = endofline(buf, last(reg))
     e1 == buf.size && return false
-    e2 = lastindexline(buf, e1+1)
+    e2 = endofline(buf, e1+1)
     line2 = edit_splice!(buf, e1 => e2) # delete whole next line
     line2 = line2[2:end]*'\n' # don't include leading '\n'
     b = beginofline(buf, first(reg))
@@ -1111,7 +1116,7 @@ function get_lines_in_region(s)::Vector{Int}
     b, e = region(buf)
     bol = Int[beginofline(buf, b)] # begin of lines
     while true
-        b = lastindexline(buf, b)
+        b = endofline(buf, b)
         b >= e && break
         # b < e ==> b+1 <= e <= buf.size
         push!(bol, b += 1)
@@ -1546,23 +1551,26 @@ mutable struct SearchState <: ModeState
     backward::Bool
     query_buffer::IOBuffer
     response_buffer::IOBuffer
+    failed::Bool
     ias::InputAreaState
     #The prompt whose input will be replaced by the matched history
     parent::Prompt
     SearchState(terminal, histprompt, backward, query_buffer, response_buffer) =
-        new(terminal, histprompt, backward, query_buffer, response_buffer, InputAreaState(0,0))
+        new(terminal, histprompt, backward, query_buffer, response_buffer, false, InputAreaState(0,0))
 end
 
 terminal(s::SearchState) = s.terminal
 
 function update_display_buffer(s::SearchState, data)
-    history_search(data.histprompt.hp, data.query_buffer, data.response_buffer, data.backward, false) || beep(s)
+    s.failed = !history_search(data.histprompt.hp, data.query_buffer, data.response_buffer, data.backward, false)
+    s.failed && beep(s)
     refresh_line(s)
     nothing
 end
 
 function history_next_result(s::MIState, data::SearchState)
-    history_search(data.histprompt.hp, data.query_buffer, data.response_buffer, data.backward, true) || beep(s)
+    data.failed = !history_search(data.histprompt.hp, data.query_buffer, data.response_buffer, data.backward, true)
+    data.failed && beep(s)
     refresh_line(data)
     nothing
 end
@@ -1584,6 +1592,7 @@ function reset_state(s::SearchState)
         s.response_buffer.ptr = 1
     end
     reset_state(s.histprompt.hp)
+    s.failed = false
     nothing
 end
 
@@ -1688,7 +1697,9 @@ function refresh_multi_line(termbuf::TerminalBuffer, s::SearchState)
     write(buf, read(s.response_buffer, String))
     buf.ptr = offset + ptr - 1
     s.response_buffer.ptr = ptr
-    ias = refresh_multi_line(termbuf, s.terminal, buf, s.ias, s.backward ? "(reverse-i-search)`" : "(forward-i-search)`")
+    failed = s.failed ? "failed " : ""
+    ias = refresh_multi_line(termbuf, s.terminal, buf, s.ias,
+                             s.backward ? "($(failed)reverse-i-search)`" : "($(failed)forward-i-search)`")
     s.ias = ias
     return ias
 end
@@ -1744,6 +1755,7 @@ function enter_search(s::MIState, p::HistoryPrompt, backward::Bool)
         ss.parent = parent
         ss.backward = backward
         truncate(ss.query_buffer, 0)
+        ss.failed = false
         copybuf!(ss.response_buffer, buf)
     end
     nothing
@@ -1842,7 +1854,7 @@ function setup_search_keymap(hp)
         # Bracketed paste mode
         "\e[200~" => (s,data,c)-> begin
             ps = state(s, mode(s))
-            input = readuntil(ps.terminal, "\e[201~", keep=true)
+            input = readuntil(ps.terminal, "\e[201~", keep=false)
             edit_insert(data.query_buffer, input); update_display_buffer(s, data)
         end,
         "*"       => (s,data,c)->(edit_insert(data.query_buffer, c); update_display_buffer(s, data))
@@ -2258,14 +2270,7 @@ function run_interface(terminal::TextTerminal, m::ModalInterface, s::MIState=ini
             @static if Sys.isunix(); ccall(:jl_repl_raise_sigtstp, Cint, ()); end
             buf, ok, suspend = prompt!(terminal, m, s)
         end
-        Core.eval(Main,
-            Expr(:body,
-                Expr(:return,
-                     Expr(:call,
-                          QuoteNode(mode(state(s)).on_done),
-                          QuoteNode(s),
-                          QuoteNode(buf),
-                          QuoteNode(ok)))))
+        Base.invokelatest(mode(state(s)).on_done, s, buf, ok)
     end
 end
 

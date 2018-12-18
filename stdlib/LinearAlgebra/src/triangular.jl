@@ -58,7 +58,7 @@ UpperTriangular(U::LowerTriangular) = throw(ArgumentError(
 """
     LowerTriangular(A::AbstractMatrix)
 
-Construct a `LowerTriangular` view of the the matrix `A`.
+Construct a `LowerTriangular` view of the matrix `A`.
 
 # Examples
 ```jldoctest
@@ -79,7 +79,7 @@ LowerTriangular
 """
     UpperTriangular(A::AbstractMatrix)
 
-Construct an `UpperTriangular` view of the the matrix `A`.
+Construct an `UpperTriangular` view of the matrix `A`.
 
 # Examples
 ```jldoctest
@@ -236,13 +236,14 @@ istril(A::LowerTriangular) = true
 istril(A::UnitLowerTriangular) = true
 istriu(A::UpperTriangular) = true
 istriu(A::UnitUpperTriangular) = true
+istril(A::Adjoint) = istriu(A.parent)
+istril(A::Transpose) = istriu(A.parent)
+istriu(A::Adjoint) = istril(A.parent)
+istriu(A::Transpose) = istril(A.parent)
 
 function tril!(A::UpperTriangular, k::Integer=0)
     n = size(A,1)
-    if !(-n - 1 <= k <= n - 1)
-        throw(ArgumentError(string("the requested diagonal, $k, must be at least ",
-            "$(-n - 1) and at most $(n - 1) in an $n-by-$n matrix")))
-    elseif k < 0
+    if k < 0
         fill!(A.data,0)
         return A
     elseif k == 0
@@ -258,10 +259,7 @@ triu!(A::UpperTriangular, k::Integer=0) = UpperTriangular(triu!(A.data,k))
 
 function tril!(A::UnitUpperTriangular{T}, k::Integer=0) where T
     n = size(A,1)
-    if !(-n - 1 <= k <= n - 1)
-        throw(ArgumentError(string("the requested diagonal, $k, must be at least ",
-            "$(-n - 1) and at most $(n - 1) in an $n-by-$n matrix")))
-    elseif k < 0
+    if k < 0
         fill!(A.data, zero(T))
         return UpperTriangular(A.data)
     elseif k == 0
@@ -287,10 +285,7 @@ end
 
 function triu!(A::LowerTriangular, k::Integer=0)
     n = size(A,1)
-    if !(-n + 1 <= k <= n + 1)
-        throw(ArgumentError(string("the requested diagonal, $k, must be at least ",
-            "$(-n + 1) and at most $(n + 1) in an $n-by-$n matrix")))
-    elseif k > 0
+    if k > 0
         fill!(A.data,0)
         return A
     elseif k == 0
@@ -307,10 +302,7 @@ tril!(A::LowerTriangular, k::Integer=0) = LowerTriangular(tril!(A.data,k))
 
 function triu!(A::UnitLowerTriangular{T}, k::Integer=0) where T
     n = size(A,1)
-    if !(-n + 1 <= k <= n + 1)
-        throw(ArgumentError(string("the requested diagonal, $k, must be at least ",
-            "$(-n + 1) and at most $(n + 1) in an $n-by-$n matrix")))
-    elseif k > 0
+    if k > 0
         fill!(A.data, zero(T))
         return LowerTriangular(A.data)
     elseif k == 0
@@ -1152,7 +1144,7 @@ function naivesub!(A::UpperTriangular, b::AbstractVector, x::AbstractVector = b)
         throw(DimensionMismatch("second dimension of left hand side A, $n, length of output x, $(length(x)), and length of right hand side b, $(length(b)), must be equal"))
     end
     @inbounds for j in n:-1:1
-        A.data[j,j] == zero(A.data[j,j]) && throw(SingularException(j))
+        iszero(A.data[j,j]) && throw(SingularException(j))
         xj = x[j] = A.data[j,j] \ b[j]
         for i in j-1:-1:1 # counterintuitively 1:j-1 performs slightly better
             b[i] -= A.data[i,j] * xj
@@ -1181,7 +1173,7 @@ function naivesub!(A::LowerTriangular, b::AbstractVector, x::AbstractVector = b)
         throw(DimensionMismatch("second dimension of left hand side A, $n, length of output x, $(length(x)), and length of right hand side b, $(length(b)), must be equal"))
     end
     @inbounds for j in 1:n
-        A.data[j,j] == zero(A.data[j,j]) && throw(SingularException(j))
+        iszero(A.data[j,j]) && throw(SingularException(j))
         xj = x[j] = A.data[j,j] \ b[j]
         for i in j+1:n
             b[i] -= A.data[i,j] * xj
@@ -1217,7 +1209,7 @@ function ldiv!(transA::Transpose{<:Any,<:LowerTriangular}, b::AbstractVector, x:
         for i in n:-1:j+1
             z -= A.data[i,j] * x[i]
         end
-        A.data[j,j] == zero(A.data[j,j]) && throw(SingularException(j))
+        iszero(A.data[j,j]) && throw(SingularException(j))
         x[j] = A.data[j,j] \ z
     end
     x
@@ -1254,7 +1246,7 @@ function ldiv!(transA::Transpose{<:Any,<:UpperTriangular}, b::AbstractVector, x:
         for i in 1:j-1
             z -= A.data[i,j] * x[i]
         end
-        A.data[j,j] == zero(A.data[j,j]) && throw(SingularException(j))
+        iszero(A.data[j,j]) && throw(SingularException(j))
         x[j] = A.data[j,j] \ z
     end
     x
@@ -1291,7 +1283,7 @@ function ldiv!(adjA::Adjoint{<:Any,<:LowerTriangular}, b::AbstractVector, x::Abs
         for i in n:-1:j+1
             z -= A.data[i,j]' * x[i]
         end
-        A.data[j,j] == zero(A.data[j,j]) && throw(SingularException(j))
+        iszero(A.data[j,j]) && throw(SingularException(j))
         x[j] = A.data[j,j]' \ z
     end
     x
@@ -1328,7 +1320,7 @@ function ldiv!(adjA::Adjoint{<:Any,<:UpperTriangular}, b::AbstractVector, x::Abs
         for i in 1:j-1
             z -= A.data[i,j]' * x[i]
         end
-        A.data[j,j] == zero(A.data[j,j]) && throw(SingularException(j))
+        iszero(A.data[j,j]) && throw(SingularException(j))
         x[j] = A.data[j,j]' \ z
     end
     x
@@ -1607,7 +1599,6 @@ rdiv!(A::LowerTriangular, transB::Transpose{<:Any,<:Union{UpperTriangular,UnitUp
 
 ## Some Triangular-Triangular cases. We might want to write tailored methods
 ## for these cases, but I'm not sure it is worth it.
-(*)(A::Union{Tridiagonal,SymTridiagonal}, B::AbstractTriangular) = rmul!(Matrix(A), B)
 
 for (f, f2!) in ((:*, :lmul!), (:\, :ldiv!))
     @eval begin

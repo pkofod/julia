@@ -22,7 +22,11 @@ export BINDIR,
        total_memory,
        isapple,
        isbsd,
+       isdragonfly,
+       isfreebsd,
        islinux,
+       isnetbsd,
+       isopenbsd,
        isunix,
        iswindows,
        isexecutable,
@@ -92,9 +96,6 @@ function __init__()
     env_threads = nothing
     if haskey(ENV, "JULIA_CPU_THREADS")
         env_threads = ENV["JULIA_CPU_THREADS"]
-    elseif haskey(ENV, "JULIA_CPU_CORES") # TODO: delete in 1.0 (deprecation)
-        Core.print("JULIA_CPU_CORES is deprecated, use JULIA_CPU_THREADS instead.\n")
-        env_threads = ENV["JULIA_CPU_CORES"]
     end
     global CPU_THREADS = if env_threads !== nothing
         env_threads = tryparse(Int, env_threads)
@@ -106,7 +107,6 @@ function __init__()
     else
         Int(ccall(:jl_cpu_threads, Int32, ()))
     end
-    global CPU_CORES = CPU_THREADS # TODO: delete in 1.0 (deprecation)
     global SC_CLK_TCK = ccall(:jl_SC_CLK_TCK, Clong, ())
     global CPU_NAME = ccall(:jl_get_cpu_name, Ref{String}, ())
     global JIT = ccall(:jl_get_JIT, Ref{String}, ())
@@ -290,7 +290,7 @@ end
 Predicate for testing if the OS is a derivative of Linux.
 See documentation in [Handling Operating System Variation](@ref).
 """
-islinux(os::Symbol) = (os == :Linux)
+islinux(os::Symbol) = (os === :Linux)
 
 """
     Sys.isbsd([os])
@@ -303,7 +303,63 @@ See documentation in [Handling Operating System Variation](@ref).
     `true` on macOS systems. To exclude macOS from a predicate, use
     `Sys.isbsd() && !Sys.isapple()`.
 """
-isbsd(os::Symbol) = (os == :FreeBSD || os == :OpenBSD || os == :NetBSD || os == :DragonFly || os == :Darwin || os == :Apple)
+isbsd(os::Symbol) = (isfreebsd(os) || isopenbsd(os) || isnetbsd(os) || isdragonfly(os) || isapple(os))
+
+"""
+    Sys.isfreebsd([os])
+
+Predicate for testing if the OS is a derivative of FreeBSD.
+See documentation in [Handling Operating System Variation](@ref).
+
+!!! note
+    Not to be confused with `Sys.isbsd()`, which is `true` on FreeBSD but also on
+    other BSD-based systems. `Sys.isfreebsd()` refers only to FreeBSD.
+!!! compat "Julia 1.1"
+    This function requires at least Julia 1.1.
+"""
+isfreebsd(os::Symbol) = (os === :FreeBSD)
+
+"""
+    Sys.isopenbsd([os])
+
+Predicate for testing if the OS is a derivative of OpenBSD.
+See documentation in [Handling Operating System Variation](@ref).
+
+!!! note
+    Not to be confused with `Sys.isbsd()`, which is `true` on OpenBSD but also on
+    other BSD-based systems. `Sys.isopenbsd()` refers only to OpenBSD.
+!!! compat "Julia 1.1"
+    This function requires at least Julia 1.1.
+"""
+isopenbsd(os::Symbol) = (os === :OpenBSD)
+
+"""
+    Sys.isnetbsd([os])
+
+Predicate for testing if the OS is a derivative of NetBSD.
+See documentation in [Handling Operating System Variation](@ref).
+
+!!! note
+    Not to be confused with `Sys.isbsd()`, which is `true` on NetBSD but also on
+    other BSD-based systems. `Sys.isnetbsd()` refers only to NetBSD.
+!!! compat "Julia 1.1"
+    This function requires at least Julia 1.1.
+"""
+isnetbsd(os::Symbol) = (os === :NetBSD)
+
+"""
+    Sys.isdragonfly([os])
+
+Predicate for testing if the OS is a derivative of DragonFly BSD.
+See documentation in [Handling Operating System Variation](@ref).
+
+!!! note
+    Not to be confused with `Sys.isbsd()`, which is `true` on DragonFly but also on
+    other BSD-based systems. `Sys.isdragonfly()` refers only to DragonFly.
+!!! compat "Julia 1.1"
+    This function requires at least Julia 1.1.
+"""
+isdragonfly(os::Symbol) = (os === :DragonFly)
 
 """
     Sys.iswindows([os])
@@ -311,7 +367,7 @@ isbsd(os::Symbol) = (os == :FreeBSD || os == :OpenBSD || os == :NetBSD || os == 
 Predicate for testing if the OS is a derivative of Microsoft Windows NT.
 See documentation in [Handling Operating System Variation](@ref).
 """
-iswindows(os::Symbol) = (os == :Windows || os == :NT)
+iswindows(os::Symbol) = (os === :Windows || os === :NT)
 
 """
     Sys.isapple([os])
@@ -319,9 +375,9 @@ iswindows(os::Symbol) = (os == :Windows || os == :NT)
 Predicate for testing if the OS is a derivative of Apple Macintosh OS X or Darwin.
 See documentation in [Handling Operating System Variation](@ref).
 """
-isapple(os::Symbol) = (os == :Apple || os == :Darwin)
+isapple(os::Symbol) = (os === :Apple || os === :Darwin)
 
-for f in (:isunix, :islinux, :isbsd, :isapple, :iswindows)
+for f in (:isunix, :islinux, :isbsd, :isapple, :iswindows, :isfreebsd, :isopenbsd, :isnetbsd, :isdragonfly)
     @eval $f() = $(getfield(@__MODULE__, f)(KERNEL))
 end
 

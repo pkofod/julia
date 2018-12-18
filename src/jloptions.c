@@ -55,6 +55,7 @@ jl_options_t jl_options = { 0,    // quiet
                             0,    // method overwrite warning
                             1,    // can_inline
                             JL_OPTIONS_POLLY_ON, // polly
+                            NULL, // trace_compile
                             JL_OPTIONS_FAST_MATH_DEFAULT,
                             0,    // worker
                             NULL, // cookie
@@ -77,6 +78,7 @@ static const char opts[]  =
     " -h, --help                Print this message\n\n"
 
     // startup options
+    " --project[={<dir>|@.}]    Set <dir> as the home project/environment\n"
     " -J, --sysimage <file>     Start up with the given system image file\n"
     " -H, --home <dir>          Set location of `julia` executable\n"
     " --startup-file={yes|no}   Load `~/.julia/config/startup.jl`\n"
@@ -109,7 +111,7 @@ static const char opts[]  =
 
     // code generation options
     //" --compile={yes|no|all|min}Enable or disable JIT compiler, or request exhaustive compilation\n"
-    " -C, --cpu-target <target> Limit usage of cpu features up to <target>; set to \"help\" to see the available options\n"
+    " -C, --cpu-target <target> Limit usage of CPU features up to <target>; set to \"help\" to see the available options\n"
     " -O, --optimize={0,1,2,3}  Set the optimization level (default level is 2 if unspecified or 3 if used without a level)\n"
     " -g, -g <level>            Enable / Set the level of debug info generation"
 #ifdef JL_DEBUG_BUILD
@@ -159,6 +161,7 @@ JL_DLLEXPORT void jl_parse_opts(int *argcp, char ***argvp)
            opt_warn_overwrite,
            opt_inline,
            opt_polly,
+           opt_trace_compile,
            opt_math_mode,
            opt_worker,
            opt_bind_to,
@@ -188,13 +191,10 @@ JL_DLLEXPORT void jl_parse_opts(int *argcp, char ***argvp)
         { "print",           required_argument, 0, 'E' },
         { "load",            required_argument, 0, 'L' },
         { "sysimage",        required_argument, 0, 'J' },
-        { "precompiled",     required_argument, 0, opt_use_precompiled },   // deprecated
         { "sysimage-native-code", required_argument, 0, opt_sysimage_native_code },
-        { "compilecache",    required_argument, 0, opt_use_compilecache },  // deprecated
         { "compiled-modules",    required_argument, 0, opt_compiled_modules },
         { "cpu-target",      required_argument, 0, 'C' },
         { "procs",           required_argument, 0, 'p' },
-        { "machinefile",     required_argument, 0, opt_machinefile },   // deprecated
         { "machine-file",    required_argument, 0, opt_machine_file },
         { "project",         optional_argument, 0, opt_project },
         { "color",           required_argument, 0, opt_color },
@@ -215,6 +215,7 @@ JL_DLLEXPORT void jl_parse_opts(int *argcp, char ***argvp)
         { "warn-overwrite",  required_argument, 0, opt_warn_overwrite },
         { "inline",          required_argument, 0, opt_inline },
         { "polly",           required_argument, 0, opt_polly },
+        { "trace-compile",   required_argument, 0, opt_trace_compile },
         { "math-mode",       required_argument, 0, opt_math_mode },
         { "handle-signals",  required_argument, 0, opt_handle_signals },
         // hidden command line options
@@ -355,9 +356,6 @@ restart_switch:
             else
                 jl_errorf("julia: invalid argument to --banner={yes|no|auto} (%s)", optarg);
             break;
-        case opt_use_precompiled:
-            jl_printf(JL_STDOUT, "WARNING: julia --precompiled option is deprecated, use --sysimage-native-code instead.\n");
-            // fall through
         case opt_sysimage_native_code:
             if (!strcmp(optarg,"yes"))
                 jl_options.use_sysimage_native_code = JL_OPTIONS_USE_SYSIMAGE_NATIVE_CODE_YES;
@@ -366,9 +364,6 @@ restart_switch:
             else
                 jl_errorf("julia: invalid argument to --sysimage-native-code={yes|no} (%s)", optarg);
             break;
-        case opt_use_compilecache:
-            jl_printf(JL_STDOUT, "WARNING: julia --compilecache option is deprecated, use --compiled-modules instead.\n");
-            // fall through
         case opt_compiled_modules:
             if (!strcmp(optarg,"yes"))
                 jl_options.use_compiled_modules = JL_OPTIONS_USE_COMPILED_MODULES_YES;
@@ -394,9 +389,6 @@ restart_switch:
                 jl_options.nprocs = (int)nprocs;
             }
             break;
-        case opt_machinefile:
-            jl_printf(JL_STDOUT, "WARNING: julia --machinefile option is deprecated, use --machine-file instead.\n");
-            // fall through
         case opt_machine_file:
             jl_options.machine_file = strdup(optarg);
             if (!jl_options.machine_file)
@@ -566,6 +558,11 @@ restart_switch:
             else {
                 jl_errorf("julia: invalid argument to --polly (%s)", optarg);
             }
+            break;
+         case opt_trace_compile:
+            jl_options.trace_compile = strdup(optarg);
+            if (!jl_options.trace_compile)
+                jl_errorf("fatal error: failed to allocate memory: %s", strerror(errno));
             break;
         case opt_math_mode:
             if (!strcmp(optarg,"ieee"))

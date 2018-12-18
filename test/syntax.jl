@@ -521,7 +521,7 @@ end
               global x = 2
               local x = 1
               end")) == Expr(:error, "variable \"x\" declared both local and global")
-
+#=
 @test Meta.lower(Main, Meta.parse("let
               local x = 2
               local x = 1
@@ -534,7 +534,7 @@ end
 @test Meta.lower(Main, Meta.parse("let x = 2
                   local x = 1
               end")) == Expr(:error, "local \"x\" declared twice")
-
+=#
 # issue #23673
 @test :(let $([:(x=1),:(y=2)]...); x+y end) == :(let x = 1, y = 2; x+y end)
 
@@ -759,7 +759,7 @@ end
 @test :(x`s\`"\x\$\\`) == :(@x_cmd "s`\"\\x\\\$\\")
 
 # Check multiline command literals
-@test :(@cmd "multiline\ncommand\n") == :```
+@test Expr(:macrocall, GlobalRef(Core, Symbol("@cmd")), LineNumberNode(@__LINE__, Symbol(@__FILE__)), "multiline\ncommand\n") == :```
 multiline
 command
 ```
@@ -1084,7 +1084,7 @@ end
 @test_throws ParseError Meta.parse("@ time")
 
 # issue #7479
-@test Meta.lower(Main, Meta.parse("(true &&& false)")) == Expr(:error, "misplaced \"&\" expression")
+@test Meta.lower(Main, Meta.parse("(true &&& false)")) == Expr(:error, "invalid syntax &false")
 
 # if an indexing expression becomes a cat expression, `end` is not special
 @test_throws ParseError Meta.parse("a[end end]")
@@ -1300,13 +1300,12 @@ let ex = Meta.parse("@doc raw\"
     @test length(ex.args) == 3
 end
 
-# TODO: enable when 0.7 deprecations are removed
-#@test Meta.parse("\"x\"
-#                  # extra line, not a doc string
-#                  f(x) = x", 1)[1] === "x"
-#@test Meta.parse("\"x\"
-#
-#                  f(x) = x", 1)[1] === "x"
+@test Meta.parse("\"x\"
+                  # extra line, not a doc string
+                  f(x) = x", 1)[1] === "x"
+@test Meta.parse("\"x\"
+
+                  f(x) = x", 1)[1] === "x"
 
 # issue #26137
 # cases where parens enclose argument lists
@@ -1329,6 +1328,8 @@ end
 @test Meta.parse("+((1,2))")   == Expr(:call, :+, Expr(:tuple, 1, 2))
 
 @test_throws ParseError("space before \"(\" not allowed in \"+ (\"") Meta.parse("1 -+ (a=1, b=2)")
+# issue #29781
+@test_throws ParseError("space before \"(\" not allowed in \"sin. (\"") Meta.parse("sin. (1)")
 
 @test Meta.parse("1 -+(a=1, b=2)") == Expr(:call, :-, 1,
                                            Expr(:call, :+, Expr(:kw, :a, 1), Expr(:kw, :b, 2)))
@@ -1370,6 +1371,11 @@ end
 
 # issue #25994
 @test Meta.parse("[a\nfor a in b]") == Expr(:comprehension, Expr(:generator, :a, Expr(:(=), :a, :b)))
+
+# issue #27529
+let len = 10
+    @test [ i for i in 0:len -1 ] == [0:9;]
+end
 
 # Module name cannot be a reserved word.
 @test_throws ParseError Meta.parse("module module end")
@@ -1498,6 +1504,12 @@ function test27710()
 end
 @test test27710() === Int64
 
+# issue #29064
+struct X29064
+    X29064::Int
+end
+@test X29064(1) isa X29064
+
 # issue #27268
 function f27268()
     g(col::AbstractArray{<:Real}) = col
@@ -1544,21 +1556,13 @@ end
 end
 @test A27807.@m()(1,1.0) === (1, 0.0)
 
-# issue #27896
-let oldstderr = stderr, newstderr, errtxt
-    try
-        newstderr = redirect_stderr()
-        @eval function foo(a::A, b::B) where {A,B}
-            B = eltype(A)
-            return convert(B, b)
-        end
-        errtxt = @async read(newstderr[1], String)
-    finally
-        redirect_stderr(oldstderr)
-        close(newstderr[2])
+# issue #27896 / #29429
+@test Meta.lower(@__MODULE__, quote
+    function foo(a::A, b::B) where {A,B}
+        B = eltype(A)
+        return convert(B, b)
     end
-    @test occursin("WARNING: local variable B conflicts with a static parameter", fetch(errtxt))
-end
+end) == Expr(:error, "local variable name \"B\" conflicts with a static parameter")
 
 # issue #28044
 code28044(x) = 10x
@@ -1570,3 +1574,193 @@ begin
     Val{code28044} where code28044
 end
 @test f28044(Val(identity)) == 2
+
+# issue #28244
+macro foo28244(sym)
+    x = :(bar())
+    push!(x.args, Expr(sym))
+    x
+end
+@test (@macroexpand @foo28244(kw)) == Expr(:call, GlobalRef(@__MODULE__,:bar), Expr(:kw))
+@test eval(:(@macroexpand @foo28244($(Symbol("let"))))) == Expr(:error, "malformed expression")
+
+# #16356
+@test_throws ParseError Meta.parse("0xapi")
+
+# #22523 #22712
+@test_throws ParseError Meta.parse("a?b:c")
+@test_throws ParseError Meta.parse("a ?b:c")
+@test_throws ParseError Meta.parse("a ? b:c")
+@test_throws ParseError Meta.parse("a ? b :c")
+@test_throws ParseError Meta.parse("?")
+
+# #13079
+@test Meta.parse("1<<2*3") == :((1<<2)*3)
+
+# #19987
+@test_throws ParseError Meta.parse("try ; catch f() ; end")
+
+# #23076
+@test :([1,2;]) == Expr(:vect, Expr(:parameters), 1, 2)
+
+# #24452
+@test Meta.parse("(a...)") == Expr(Symbol("..."), :a)
+
+# #19324
+@test_throws UndefVarError(:x) eval(:(module M19324
+                 x=1
+                 for i=1:10
+                     x += i
+                 end
+             end))
+
+# #22314
+function f22314()
+    i = 0
+    for i = 1:10
+    end
+    i
+end
+@test f22314() == 0
+
+module M22314
+i = 0
+for i = 1:10
+end
+end
+@test M22314.i == 0
+
+# #6080
+@test Meta.lower(@__MODULE__, :(ccall(:a, Cvoid, (Cint,), &x))) == Expr(:error, "invalid syntax &x")
+
+@test_throws ParseError Meta.parse("x.'")
+@test_throws ParseError Meta.parse("0.+1")
+
+# #24221
+@test Meta.isexpr(Meta.lower(@__MODULE__, :(a=_)), :error)
+
+for ex in [:([x=1]), :(T{x=1})]
+    @test Meta.lower(@__MODULE__, ex) == Expr(:error, string("misplaced assignment statement in \"", ex, "\""))
+end
+
+# issue #28576
+@test Meta.isexpr(Meta.parse("1 == 2 ?"), :incomplete)
+@test Meta.isexpr(Meta.parse("1 == 2 ? 3 :"), :incomplete)
+
+# issue #28991
+eval(Expr(:toplevel,
+          Expr(:module, true, :Mod28991,
+               Expr(:block,
+                    Expr(:export, :Inner),
+                    Expr(:abstract, :Inner)))))
+@test names(Mod28991) == Symbol[:Inner, :Mod28991]
+
+# issue #28593
+macro a28593()
+    quote
+        abstract type A28593{S<:Real, V<:AbstractVector{S}} end
+    end
+end
+
+macro b28593()
+    quote
+        struct B28593{S<:Real, V<:AbstractVector{S}} end
+    end
+end
+
+macro c28593()
+    quote
+        primitive type C28593{S<:Real, V<:AbstractVector{S}} 32 end
+    end
+end
+
+@a28593
+@b28593
+@c28593
+
+@test A28593.var.name === :S
+@test B28593.var.name === :S
+@test C28593.var.name === :S
+
+# issue #25955
+macro noeffect25955(e)
+    return e
+end
+
+struct foo25955
+end
+
+@noeffect25955 function (f::foo25955)()
+    42
+end
+
+@test foo25955()() == 42
+
+# issue #28833
+macro m28833(expr)
+    esc(:(global a28833))
+end
+@m28833 1+1
+
+# issue #28900
+macro foo28900(x)
+    quote
+        $x
+    end
+end
+f28900(; kwarg) = kwarg
+let g = @foo28900 f28900(kwarg = x->2x)
+    @test g(10) == 20
+end
+
+# issue #26037
+x26037() = 10
+function test_26037()
+    [x26037() for _ in 1:3]
+    for x26037 in 1:3
+       x26037 += x26037
+    end
+end
+@test test_26037() === nothing  # no UndefVarError
+
+# range and interval operators
+@test Meta.parse("1…2") == Expr(:call, :…, 1, 2)
+@test Meta.parse("1⁝2") == Expr(:call, :⁝, 1, 2)
+@test Meta.parse("1..2") == Expr(:call, :.., 1, 2)
+# we don't parse chains of these since the associativity and meaning aren't clear
+@test_throws ParseError Meta.parse("1..2..3")
+
+# issue #30048
+@test Meta.isexpr(Meta.lower(@__MODULE__, :(for a in b
+           c = try
+               try
+                   d() do
+                       if  GC.@preserve c begin
+                           end
+                       end
+                   end
+               finally
+               end
+           finally
+           end
+       end)), :thunk)
+
+# issue #28506
+@test Meta.isexpr(Meta.parse("1,"), :incomplete)
+@test Meta.isexpr(Meta.parse("1, "), :incomplete)
+@test Meta.isexpr(Meta.parse("1,\n"), :incomplete)
+@test Meta.isexpr(Meta.parse("1, \n"), :incomplete)
+@test_throws LoadError include_string(@__MODULE__, "1,")
+@test_throws LoadError include_string(@__MODULE__, "1,\n")
+
+# issue #30062
+let er = Meta.lower(@__MODULE__, quote if false end, b+=2 end)
+    @test Meta.isexpr(er, :error)
+    @test startswith(er.args[1], "invalid multiple assignment location \"if")
+end
+
+# issue #30030
+let x = 0
+    @test (a=1, b=2, c=(x=3)) == (a=1, b=2, c=3)
+    @test x == 3
+end

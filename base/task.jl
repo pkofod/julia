@@ -178,8 +178,7 @@ function task_local_storage(body::Function, key, val)
 end
 
 # NOTE: you can only wait for scheduled tasks
-# TODO: rename to wait for 1.0
-function _wait(t::Task)
+function wait(t::Task)
     if !istaskdone(t)
         if t.donenotify === nothing
             t.donenotify = Condition()
@@ -193,8 +192,6 @@ function _wait(t::Task)
     end
 end
 
-_wait(not_a_task) = wait(not_a_task)
-
 """
     fetch(t::Task)
 
@@ -202,7 +199,7 @@ Wait for a Task to finish, then return its result value. If the task fails with 
 exception, the exception is propagated (re-thrown in the task that called fetch).
 """
 function fetch(t::Task)
-    _wait(t)
+    wait(t)
     task_result(t)
 end
 
@@ -213,10 +210,10 @@ function sync_end(refs)
     c_ex = CompositeException()
     for r in refs
         try
-            _wait(r)
-        catch ex
+            wait(r)
+        catch
             if !isa(r, Task) || (isa(r, Task) && !istaskfailed(r))
-                rethrow(ex)
+                rethrow()
             end
         finally
             if isa(r, Task) && istaskfailed(r)
@@ -319,7 +316,7 @@ function task_done_hook(t::Task)
             active_repl_backend.in_eval
             throwto(active_repl_backend.backend_task, e)
         else
-            rethrow(e)
+            rethrow()
         end
     end
 end

@@ -1,7 +1,23 @@
-# Julia 0.7 Documentation
+```@eval
+io = IOBuffer()
+release = isempty(VERSION.prerelease)
+v = "$(VERSION.major).$(VERSION.minor)"
+!release && (v = v*"-$(first(VERSION.prerelease))")
+print(io, """
+    # Julia $(v) Documentation
 
-Welcome to the documentation for Julia 0.7.
+    Welcome to the documentation for Julia $(v).
 
+    """)
+if !release
+    print(io,"""
+        !!! warning "Work in progress!"
+            This documentation is for an unreleased, in-development, version of Julia.
+        """)
+end
+import Markdown
+Markdown.parse(String(take!(io)))
+```
 Please read the [release notes](NEWS.md) to see what has changed since the last release.
 
 ### [Introduction](@id man-introduction)

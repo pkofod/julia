@@ -11,7 +11,7 @@ function show(io::IO, ::MIME"text/plain", r::LinRange)
     # range(1, stop=3, length=7)
     # 7-element LinRange{Float64}:
     #   1.0,1.33333,1.66667,2.0,2.33333,2.66667,3.0
-    print(io, summary(r))
+    summary(io, r)
     if !isempty(r)
         println(io, ":")
         print_range(io, r)
@@ -41,7 +41,7 @@ function show(io::IO, ::MIME"text/plain", f::Function)
 end
 
 function show(io::IO, ::MIME"text/plain", iter::Union{KeySet,ValueIterator})
-    print(io, summary(iter))
+    summary(io, iter)
     isempty(iter) && return
     print(io, ". ", isa(iter,KeySet) ? "Keys" : "Values", ":")
     limit::Bool = get(io, :limit, false)
@@ -78,7 +78,7 @@ function show(io::IO, ::MIME"text/plain", t::AbstractDict{K,V}) where {K,V}
         recur_io = IOContext(recur_io, :compact => true)
     end
 
-    print(io, summary(t))
+    summary(io, t)
     isempty(t) && return
     print(io, ":")
     show_circular(io, t) && return
@@ -186,8 +186,7 @@ end
 
 convert(::Type{IOContext}, io::IO) = IOContext(unwrapcontext(io)...)
 
-# rename to IOContext when deprecation of `IOContext(io::IO; kws...)` is removed
-_IOContext(io::IO) = convert(IOContext, io)
+IOContext(io::IO) = convert(IOContext, io)
 
 function IOContext(io::IO, KV::Pair)
     io0, d = unwrapcontext(io)
@@ -369,7 +368,7 @@ function show(io::IO, f::Function)
     mt = ft.name.mt
     if isdefined(mt, :module) && isdefined(mt.module, mt.name) &&
         getfield(mt.module, mt.name) === f
-        if is_exported_from_stdlib(mt.name, mt.module) || mt.module === Main
+        if is_exported_from_stdlib(mt.name, mt.module) || mt.module === Main || get(io, :compact, false)
             print(io, mt.name)
         else
             print(io, mt.module, ".", mt.name)
@@ -464,6 +463,13 @@ function show_type_name(io::IO, tn::Core.TypeName)
         end
     end
     sym = globfunc ? globname : tn.name
+    if get(io, :compact, false)
+        if globfunc
+            return print(io, "typeof(", sym, ")")
+        else
+            return print(io, sym)
+        end
+    end
     sym_str = string(sym)
     hidden = !globfunc && '#' ∈ sym_str
     quo = false
@@ -557,6 +563,7 @@ function show(io::IO, tn::Core.TypeName)
 end
 
 show(io::IO, ::Nothing) = print(io, "nothing")
+print(io::IO, ::Nothing) = throw(ArgumentError("`nothing` should not be printed; use `show`, `repr`, or custom output instead."))
 show(io::IO, b::Bool) = print(io, b ? "true" : "false")
 show(io::IO, n::Signed) = (write(io, string(n)); nothing)
 show(io::IO, n::Unsigned) = print(io, "0x", string(n, pad = sizeof(n)<<1, base = 16))
@@ -582,19 +589,16 @@ function gettypeinfos(io::IO, p::Pair)
 end
 
 function show(io::IO, p::Pair)
-    compact = get(io, :compact, false)
     iocompact = IOContext(io, :compact => get(io, :compact, true))
     isdelimited(io, p) && return show_default(iocompact, p)
-
     typeinfos = gettypeinfos(io, p)
-    isdelimited(iocompact, p.first) || print(io, "(")
-    show(IOContext(iocompact, :typeinfo => typeinfos[1]), p.first)
-    isdelimited(iocompact, p.first) || print(io, ")")
-    print(io, compact ? "=>" : " => ")
-    isdelimited(iocompact, p.second) || print(io, "(")
-    show(IOContext(iocompact, :typeinfo => typeinfos[2]), p.second)
-    isdelimited(iocompact, p.second) || print(io, ")")
-    nothing
+    for i = (1, 2)
+        io_i = IOContext(iocompact, :typeinfo => typeinfos[i])
+        isdelimited(io_i, p[i]) || print(io, "(")
+        show(io_i, p[i])
+        isdelimited(io_i, p[i]) || print(io, ")")
+        i == 1 && print(io, get(io, :compact, false) ? "=>" : " => ")
+    end
 end
 
 function show(io::IO, m::Module)
@@ -638,39 +642,6 @@ function show(io::IO, l::Core.MethodInstance)
     else
         print(io, "Toplevel MethodInstance thunk")
     end
-end
-
-module IRShow
-    const Compiler = Core.Compiler
-    using Core.IR
-    import ..Base
-    import .Base: IdSet
-    import .Compiler: IRCode, ReturnNode, GotoIfNot, CFG, scan_ssa_use!, Argument, isexpr
-    Base.size(r::Compiler.StmtRange) = Compiler.size(r)
-    Base.show(io::IO, r::Compiler.StmtRange) = print(io, Compiler.first(r):Compiler.last(r))
-    include("compiler/ssair/show.jl")
-end
-
-function show(io::IO, src::CodeInfo)
-    # Fix slot names and types in function body
-    print(io, "CodeInfo(")
-    lambda_io = io
-    if src.slotnames !== nothing
-        lambda_io = IOContext(lambda_io, :SOURCE_SLOTNAMES => sourceinfo_slotnames(src))
-    end
-    @assert src.codelocs !== nothing
-    if isempty(src.linetable) || src.linetable[1] isa LineInfoNode
-        println(io)
-        # TODO: static parameter values?
-        ir = Core.Compiler.inflate_ir(src)
-        IRShow.show_ir(lambda_io, ir, argnames=sourceinfo_slotnames(src))
-    else
-        # this is a CodeInfo that has not been used as a method yet, so its locations are still LineNumberNodes
-        body = Expr(:body)
-        body.args = src.code
-        show(lambda_io, body)
-    end
-    print(io, ")")
 end
 
 function show_delim_array(io::IO, itr::Union{AbstractArray,SimpleVector}, op, delim, cl,
@@ -769,8 +740,9 @@ show(io::IO, s::Symbol) = show_unquoted_quote_expr(io, s, 0, 0)
 #   eval(Meta.parse("Set{Int64}([2,3,1])”) # ==> An actual set
 # While this isn’t true of ALL show methods, it is of all ASTs.
 
-const ExprNode = Union{Expr, QuoteNode, Slot, LineNumberNode,
-                       GotoNode, GlobalRef}
+const ExprNode = Union{Expr, QuoteNode, Slot, LineNumberNode, SSAValue,
+                       GotoNode, GlobalRef, PhiNode, PhiCNode, UpsilonNode,
+                       Core.Compiler.GotoIfNot, Core.Compiler.ReturnNode}
 # Operators have precedence levels from 1-N, and show_unquoted defaults to a
 # precedence level of 0 (the fourth argument). The top-level print and show
 # methods use a precedence of -1 to specially allow space-separated macro syntax
@@ -789,7 +761,7 @@ const uni_ops = Set{Symbol}([:(+), :(-), :(!), :(¬), :(~), :(<:), :(>:), :(√)
 const expr_infix_wide = Set{Symbol}([
     :(=), :(+=), :(-=), :(*=), :(/=), :(\=), :(^=), :(&=), :(|=), :(÷=), :(%=), :(>>>=), :(>>=), :(<<=),
     :(.=), :(.+=), :(.-=), :(.*=), :(./=), :(.\=), :(.^=), :(.&=), :(.|=), :(.÷=), :(.%=), :(.>>>=), :(.>>=), :(.<<=),
-    :(&&), :(||), :(<:), :($=), :(⊻=)]) # `$=` should be removed after deprecation is removed, issue #18977
+    :(&&), :(||), :(<:), :($=), :(⊻=)])
 const expr_infix = Set{Symbol}([:(:), :(->), Symbol("::")])
 const expr_infix_any = union(expr_infix, expr_infix_wide)
 const expr_calls  = Dict(:call => ('(',')'), :calldecl => ('(',')'),
@@ -914,6 +886,9 @@ unquoted(ex::Expr)       = ex.args[1]
 
 ## AST printing helpers ##
 
+function printstyled end
+function with_output_color end
+
 const indent_width = 4
 
 is_expected_union(u::Union) = u.a == Nothing || u.b == Nothing || u.a == Missing || u.b == Missing
@@ -939,7 +914,7 @@ function show_block(io::IO, head, args::Vector, body, indent::Int)
     end
 
     ind = head === :module || head === :baremodule ? indent : indent + indent_width
-    exs = (is_expr(body, :block) || is_expr(body, :body)) ? body.args : Any[body]
+    exs = is_expr(body, :block) ? body.args : Any[body]
     for ex in exs
         print(io, '\n', " "^ind)
         show_unquoted(io, ex, ind, -1)
@@ -1008,22 +983,24 @@ end
 
 ## AST printing ##
 
+show_unquoted(io::IO, val::SSAValue, ::Int, ::Int)      = print(io, "%", val.id)
 show_unquoted(io::IO, sym::Symbol, ::Int, ::Int)        = print(io, sym)
 show_unquoted(io::IO, ex::LineNumberNode, ::Int, ::Int) = show_linenumber(io, ex.line, ex.file)
-show_unquoted(io::IO, ex::GotoNode, ::Int, ::Int)       = print(io, "goto ", ex.label)
+show_unquoted(io::IO, ex::GotoNode, ::Int, ::Int)       = print(io, "goto %", ex.label)
 function show_unquoted(io::IO, ex::GlobalRef, ::Int, ::Int)
     print(io, ex.mod)
     print(io, '.')
     quoted = !isidentifier(ex.name)
-    parens = quoted && !isoperator(ex.name)
+    parens = quoted && (!isoperator(ex.name) || (ex.name in quoted_syms))
     quoted && print(io, ':')
     parens && print(io, '(')
     print(io, ex.name)
     parens && print(io, ')')
+    nothing
 end
 
 function show_unquoted(io::IO, ex::Slot, ::Int, ::Int)
-    typ = isa(ex,TypedSlot) ? ex.typ : Any
+    typ = isa(ex, TypedSlot) ? ex.typ : Any
     slotid = ex.id
     slotnames = get(io, :SOURCE_SLOTNAMES, false)
     if (isa(slotnames, Vector{String}) &&
@@ -1032,7 +1009,7 @@ function show_unquoted(io::IO, ex::Slot, ::Int, ::Int)
     else
         print(io, "_", slotid)
     end
-    if typ !== Any && isa(ex,TypedSlot)
+    if typ !== Any && isa(ex, TypedSlot)
         print(io, "::", typ)
     end
 end
@@ -1047,14 +1024,14 @@ function show_unquoted(io::IO, ex::QuoteNode, indent::Int, prec::Int)
     end
 end
 
-function show_unquoted_quote_expr(io::IO, value, indent::Int, prec::Int)
+function show_unquoted_quote_expr(io::IO, @nospecialize(value), indent::Int, prec::Int)
     if isa(value, Symbol) && !(value in quoted_syms)
         s = string(value)
         if isidentifier(s) || isoperator(value)
             print(io, ":")
             print(io, value)
         else
-            print(io, "Symbol(\"", escape_string(s), "\")")
+            print(io, "Symbol(", repr(s), ")")
         end
     else
         if isa(value,Expr) && value.head === :block
@@ -1131,7 +1108,7 @@ function show_unquoted(io::IO, ex::Expr, indent::Int, prec::Int)
             # .
             print(io, '.')
             # item
-            parens = !(field isa Symbol)
+            parens = !(field isa Symbol) || (field in quoted_syms)
             quoted = parens || isoperator(field)
             quoted && print(io, ':')
             parens && print(io, '(')
@@ -1175,7 +1152,7 @@ function show_unquoted(io::IO, ex::Expr, indent::Int, prec::Int)
     # function call
     elseif head === :call && nargs >= 1
         func = args[1]
-        fname = isa(func,GlobalRef) ? func.name : func
+        fname = isa(func, GlobalRef) ? func.name : func
         func_prec = operator_precedence(fname)
         if func_prec > 0 || fname in uni_ops
             func = fname
@@ -1229,10 +1206,14 @@ function show_unquoted(io::IO, ex::Expr, indent::Int, prec::Int)
             show_call(io, head, func, func_args, indent)
         end
 
+    # new expr
+    elseif head === :new
+        show_enclosed_list(io, "%new(", args, ", ", ")", indent)
+
     # other call-like expressions ("A[1,2]", "T{X,Y}", "f.(X,Y)")
     elseif haskey(expr_calls, head) && nargs >= 1  # :ref/:curly/:calldecl/:(.)
-        funcargslike = head == :(.) ? ex.args[2].args : ex.args[2:end]
-        show_call(io, head, ex.args[1], funcargslike, indent)
+        funcargslike = head == :(.) ? args[2].args : args[2:end]
+        show_call(io, head, args[1], funcargslike, indent)
 
     # comprehensions
     elseif head === :typed_comprehension && length(args) == 2
@@ -1370,15 +1351,18 @@ function show_unquoted(io::IO, ex::Expr, indent::Int, prec::Int)
         end
         print(io, "end")
 
-    elseif head === :block || head === :body
-        show_block(io, "begin", ex, indent); print(io, "end")
+    elseif head === :block
+        show_block(io, "begin", ex, indent)
+        print(io, "end")
 
-    elseif head === :quote && nargs == 1 && isa(args[1],Symbol)
-        show_unquoted_quote_expr(io, args[1], indent, 0)
+    elseif head === :quote && nargs == 1 && isa(args[1], Symbol)
+        show_unquoted_quote_expr(io, args[1]::Symbol, indent, 0)
 
-    elseif head === :gotoifnot && nargs == 2
+    elseif head === :gotoifnot && nargs == 2 && isa(args[2], Int)
         print(io, "unless ")
-        show_list(io, args, " goto ", indent)
+        show_unquoted(io, args[1], indent, 0)
+        print(io, " goto %")
+        print(io, args[2]::Int)
 
     elseif head === :string && nargs == 1 && isa(args[1], AbstractString)
         show(io, args[1])
@@ -1386,7 +1370,7 @@ function show_unquoted(io::IO, ex::Expr, indent::Int, prec::Int)
     elseif head === :null
         print(io, "nothing")
 
-    elseif head === :kw && length(args)==2
+    elseif head === :kw && nargs == 2
         show_unquoted(io, args[1], indent+indent_width)
         print(io, '=')
         show_unquoted(io, args[2], indent+indent_width)
@@ -1417,7 +1401,7 @@ function show_unquoted(io::IO, ex::Expr, indent::Int, prec::Int)
         parens && print(io, ")")
 
     # transpose
-    elseif (head === Symbol('\'') || head === Symbol(".'")) && length(args) == 1
+    elseif head === Symbol('\'') && length(args) == 1
         if isa(args[1], Symbol)
             show_unquoted(io, args[1])
         else
@@ -1479,11 +1463,11 @@ function show_tuple_as_call(io::IO, name::Symbol, sig::Type)
     # print a method signature tuple for a lambda definition
     color = get(io, :color, false) && get(io, :backtrace, false) ? stackframe_function_color() : :nothing
     if sig === Tuple
-        Base.printstyled(io, name, "(...)", color=color)
+        printstyled(io, name, "(...)", color=color)
         return
     end
     sig = unwrap_unionall(sig).parameters
-    Base.with_output_color(color, io) do io
+    with_output_color(color, io) do io
         ft = sig[1]
         uw = unwrap_unionall(ft)
         if ft <: Function && isa(uw,DataType) && isempty(uw.parameters) &&
@@ -1569,6 +1553,47 @@ function show(io::IO, tv::TypeVar)
     nothing
 end
 
+module IRShow
+    const Compiler = Core.Compiler
+    using Core.IR
+    import ..Base
+    import .Compiler: IRCode, ReturnNode, GotoIfNot, CFG, scan_ssa_use!, Argument, isexpr, compute_basic_blocks, block_for_inst
+    Base.size(r::Compiler.StmtRange) = Compiler.size(r)
+    Base.first(r::Compiler.StmtRange) = Compiler.first(r)
+    Base.last(r::Compiler.StmtRange) = Compiler.last(r)
+    include("compiler/ssair/show.jl")
+
+    const debuginfo = Dict{Symbol, Any}(
+        # :full => src -> Base.IRShow.DILineInfoPrinter(src.linetable), # and add variable slot information
+        :source => src -> Base.IRShow.DILineInfoPrinter(src.linetable),
+        # :oneliner => src -> Base.IRShow.PartialLineInfoPrinter(src.linetable),
+        :none => src -> Base.IRShow.lineinfo_disabled,
+        )
+    debuginfo[:default] = debuginfo[:none]
+end
+
+function show(io::IO, src::CodeInfo; debuginfo::Symbol=:default)
+    # Fix slot names and types in function body
+    print(io, "CodeInfo(")
+    lambda_io::IOContext = io
+    if src.slotnames !== nothing
+        lambda_io = IOContext(lambda_io, :SOURCE_SLOTNAMES => sourceinfo_slotnames(src))
+    end
+    @assert src.codelocs !== nothing
+    if isempty(src.linetable) || src.linetable[1] isa LineInfoNode
+        println(io)
+        # TODO: static parameter values?
+        IRShow.show_ir(lambda_io, src, IRShow.debuginfo[debuginfo](src))
+    else
+        # this is a CodeInfo that has not been used as a method yet, so its locations are still LineNumberNodes
+        body = Expr(:block)
+        body.args = src.code
+        show(lambda_io, body)
+    end
+    print(io, ")")
+end
+
+
 function dump(io::IOContext, x::SimpleVector, n::Int, indent)
     if isempty(x)
         print(io, "empty SimpleVector")
@@ -1637,7 +1662,7 @@ function dump_elts(io::IOContext, x::Array, n::Int, indent, i0, i1)
 end
 
 function dump(io::IOContext, x::Array, n::Int, indent)
-    print(io, "Array{$(eltype(x))}($(size(x)))")
+    print(io, "Array{", eltype(x), "}(", size(x), ")")
     if eltype(x) <: Number
         print(io, " ")
         show(io, x)
@@ -1722,7 +1747,11 @@ MyStruct
   y: Tuple{Int64,Int64}
 ```
 """
-dump(arg; maxdepth=DUMP_DEFAULT_MAXDEPTH) = dump(IOContext(stdout::IO, :limit => true), arg; maxdepth=maxdepth)
+function dump(arg; maxdepth=DUMP_DEFAULT_MAXDEPTH)
+    # this is typically used interactively, so default to being in Main
+    mod = get(stdout, :module, Main)
+    dump(IOContext(stdout::IO, :limit => true, :module => mod), arg; maxdepth=maxdepth)
+end
 
 
 """
@@ -1802,7 +1831,7 @@ dims2string(d) = isempty(d) ? "0-dimensional" :
 
 inds2string(inds) = join(map(_indsstring,inds), '×')
 _indsstring(i) = string(i)
-_indsstring(i::Slice) = string(i.indices)
+_indsstring(i::Union{IdentityUnitRange, Slice}) = string(i.indices)
 
 # anything array-like gets summarized e.g. 10-element Array{Int64,1}
 summary(io::IO, a::AbstractArray) = summary(io, a, axes(a))
@@ -1877,7 +1906,7 @@ function showarg(io::IO, v::SubArray, toplevel)
     print(io, ')')
     toplevel && print(io, " with eltype ", eltype(v))
 end
-showindices(io, ::Slice, inds...) =
+showindices(io, ::Union{Slice,IdentityUnitRange}, inds...) =
     (print(io, ", :"); showindices(io, inds...))
 showindices(io, ind1, inds...) =
     (print(io, ", ", ind1); showindices(io, inds...))
@@ -1892,14 +1921,14 @@ function showarg(io::IO, r::ReshapedArray, toplevel)
 end
 
 function showarg(io::IO, r::ReinterpretArray{T}, toplevel) where {T}
-    print(io, "reinterpret($T, ")
+    print(io, "reinterpret(", T, ", ")
     showarg(io, parent(r), false)
     print(io, ')')
 end
 
 # pretty printing for Iterators.Pairs
 function Base.showarg(io::IO, r::Iterators.Pairs{<:Integer, <:Any, <:Any, T}, toplevel) where T<:AbstractArray
-    print(io, "pairs(IndexLinear(), ::$T)")
+    print(io, "pairs(IndexLinear(), ::", T, ")")
 end
 
 function Base.showarg(io::IO, r::Iterators.Pairs{Symbol, <:Any, <:Any, T}, toplevel) where {T <: NamedTuple}
@@ -1907,7 +1936,7 @@ function Base.showarg(io::IO, r::Iterators.Pairs{Symbol, <:Any, <:Any, T}, tople
 end
 
 function Base.showarg(io::IO, r::Iterators.Pairs{<:Any, <:Any, I, D}, toplevel) where {D, I}
-    print(io, "Iterators.Pairs(::$D, ::$I)")
+    print(io, "Iterators.Pairs(::", D, ", ::", I, ")")
 end
 
 # printing BitArrays

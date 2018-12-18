@@ -88,6 +88,7 @@ end
 # lock / unlock
 let l = ReentrantLock()
     lock(l)
+    @test islocked(l)
     success = Ref(false)
     @test trylock(l) do
         @test lock(l) do
@@ -102,7 +103,7 @@ let l = ReentrantLock()
             @test false
         end === false
     end
-    Base._wait(t)
+    Base.wait(t)
     unlock(l)
     @test_throws ErrorException unlock(l)
 end
@@ -112,9 +113,9 @@ end
 @noinline function f6597(c)
     t = @async nothing
     finalizer(t -> c[] += 1, t)
-    Base._wait(t)
+    Base.wait(t)
     @test c[] == 0
-    Base._wait(t)
+    Base.wait(t)
     nothing
 end
 let c = Ref(0),
@@ -677,4 +678,48 @@ end
 
     # Just checking that this doesn't stack overflow on construction
     @test Test27970Empty() == Test27970Empty()
+end
+
+abstract type AbstractTest29307 end
+@kwdef struct Test29307{T<:Integer} <: AbstractTest29307
+    a::T=2
+end
+
+@testset "subtyped @kwdef" begin
+    @test Test29307() == Test29307{Int}(2)
+    @test Test29307(a=0x03) == Test29307{UInt8}(0x03)
+    @test Test29307{UInt32}() == Test29307{UInt32}(2)
+    @test Test29307{UInt32}(a=0x03) == Test29307{UInt32}(0x03)
+end
+
+@kwdef struct TestInnerConstructor
+    a = 1
+    TestInnerConstructor(a::Int) = (@assert a>0; new(a))
+    function TestInnerConstructor(a::String)
+        @assert length(a) > 0
+        new(a)
+    end
+end
+
+@testset "@kwdef inner constructor" begin
+    @test TestInnerConstructor() == TestInnerConstructor(1)
+    @test TestInnerConstructor(a=2) == TestInnerConstructor(2)
+    @test_throws AssertionError TestInnerConstructor(a=0)
+    @test TestInnerConstructor(a="2") == TestInnerConstructor("2")
+    @test_throws AssertionError TestInnerConstructor(a="")
+end
+
+const outsidevar = 7
+@kwdef struct TestOutsideVar
+    a::Int=outsidevar
+end
+@test TestOutsideVar() == TestOutsideVar(7)
+
+
+@testset "exports of modules" begin
+    for (_, mod) in Base.loaded_modules
+       for v in names(mod)
+           @test isdefined(mod, v)
+       end
+   end
 end

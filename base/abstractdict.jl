@@ -44,8 +44,10 @@ struct ValueIterator{T<:AbstractDict}
     dict::T
 end
 
-summary(iter::T) where {T<:Union{KeySet,ValueIterator}} =
-    string(T.name, " for a ", summary(iter.dict))
+function summary(io::IO, iter::T) where {T<:Union{KeySet,ValueIterator}}
+    print(io, T.name, " for a ")
+    summary(io, iter.dict)
+end
 
 show(io::IO, iter::Union{KeySet,ValueIterator}) = show_vector(io, iter)
 
@@ -146,13 +148,8 @@ The default is to return an empty `Dict`.
 empty(a::AbstractDict) = empty(a, keytype(a), valtype(a))
 empty(a::AbstractDict, ::Type{V}) where {V} = empty(a, keytype(a), V) # Note: this is the form which makes sense for `Vector`.
 
-function copy(a::AbstractDict)
-    b = empty(a)
-    for (k,v) in a
-        b[k] = v
-    end
-    return b
-end
+copy(a::AbstractDict) = merge!(empty(a), a)
+copy!(dst::AbstractDict, src::AbstractDict) = merge!(empty!(dst), src)
 
 """
     merge!(d::AbstractDict, others::AbstractDict...)
@@ -349,14 +346,10 @@ Dict{Int64,String} with 2 entries:
 """
 function filter!(f, d::AbstractDict)
     badkeys = Vector{keytype(d)}()
-    try
-        for pair in d
-            # don't delete!(d, k) here, since dictionary types
-            # may not support mutation during iteration
-            f(pair) || push!(badkeys, pair.first)
-        end
-    catch e
-        return filter!_dict_deprecation(e, f, d)
+    for pair in d
+        # don't delete!(d, k) here, since dictionary types
+        # may not support mutation during iteration
+        f(pair) || push!(badkeys, pair.first)
     end
     for k in badkeys
         delete!(d, k)
@@ -365,32 +358,10 @@ function filter!(f, d::AbstractDict)
 end
 
 function filter_in_one_pass!(f, d::AbstractDict)
-    try
-        for pair in d
-            if !f(pair)
-                delete!(d, pair.first)
-            end
+    for pair in d
+        if !f(pair)
+            delete!(d, pair.first)
         end
-    catch e
-        return filter!_dict_deprecation(e, f, d)
-    end
-    return d
-end
-
-function filter!_dict_deprecation(e, f, d::AbstractDict)
-    if isa(e, MethodError) && e.f === f
-        depwarn("In `filter!(f, dict)`, `f` is now passed a single pair instead of two arguments.", :filter!)
-        badkeys = Vector{keytype(d)}()
-        for (k,v) in d
-            # don't delete!(d, k) here, since dictionary types
-            # may not support mutation during iteration
-            f(k, v) || push!(badkeys, k)
-        end
-        for k in badkeys
-            delete!(d, k)
-        end
-    else
-        rethrow(e)
     end
     return d
 end
@@ -431,7 +402,7 @@ function filter(f, d::AbstractDict)
                 end
             end
         else
-            rethrow(e)
+            rethrow()
         end
     end
     return df
@@ -579,12 +550,12 @@ end
 function IdDict(kv)
     try
         dict_with_eltype((K, V) -> IdDict{K, V}, kv, eltype(kv))
-    catch e
-        if !applicable(start, kv) || !all(x->isa(x,Union{Tuple,Pair}),kv)
+    catch
+        if !applicable(iterate, kv) || !all(x->isa(x,Union{Tuple,Pair}),kv)
             throw(ArgumentError(
                 "IdDict(kv): kv needs to be an iterator of tuples or pairs"))
         else
-            rethrow(e)
+            rethrow()
         end
     end
 end
@@ -673,6 +644,23 @@ length(d::IdDict) = d.count
 copy(d::IdDict) = typeof(d)(d)
 
 get!(d::IdDict{K,V}, @nospecialize(key), @nospecialize(default)) where {K, V} = (d[key] = get(d, key, default))::V
+
+function get(default::Callable, d::IdDict{K,V}, @nospecialize(key)) where {K, V}
+    val = get(d, key, secret_table_token)
+    if val === secret_table_token
+        val = default()
+    end
+    return val
+end
+
+function get!(default::Callable, d::IdDict{K,V}, @nospecialize(key)) where {K, V}
+    val = get(d, key, secret_table_token)
+    if val === secret_table_token
+        val = default()
+        setindex!(d, val, key)
+    end
+    return val
+end
 
 in(@nospecialize(k), v::KeySet{<:Any,<:IdDict}) = get(v.dict, k, secret_table_token) !== secret_table_token
 

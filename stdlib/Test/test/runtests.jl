@@ -1,7 +1,7 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
 using Test, Distributed, Random
-using Test: guardsrand
+using Test: guardseed
 
 import Logging: Debug, Info, Warn
 
@@ -612,18 +612,18 @@ let msg = split(read(pipeline(ignorestatus(`$(Base.julia_cmd()) --startup-file=n
     @test msg == rstrip(msg)
 end
 
-@testset "test guarded srand" begin
+@testset "test guarded Random.seed!" begin
     seed = rand(UInt)
     orig = copy(Random.GLOBAL_RNG)
-    @test guardsrand(()->rand(), seed) == guardsrand(()->rand(), seed)
-    @test guardsrand(()->rand(Int), seed) == guardsrand(()->rand(Int), seed)
+    @test guardseed(()->rand(), seed) == guardseed(()->rand(), seed)
+    @test guardseed(()->rand(Int), seed) == guardseed(()->rand(Int), seed)
     r1, r2 = MersenneTwister(0), MersenneTwister(0)
-    a, b = guardsrand(r1) do
-        srand(r1, 0)
+    a, b = guardseed(r1) do
+        Random.seed!(r1, 0)
         rand(r1), rand(r1, Int)
     end::Tuple{Float64,Int}
-    c, d = guardsrand(r2) do
-        srand(r2, 0)
+    c, d = guardseed(r2) do
+        Random.seed!(r2, 0)
         rand(r2), rand(r2, Int)
     end::Tuple{Float64,Int}
     @test a == c == rand(r1) == rand(r2)
@@ -739,9 +739,9 @@ end
 end
 
 @testset "@testset preserves GLOBAL_RNG's state, and re-seeds it" begin
-    # i.e. it behaves as if it was wrapped in a `guardsrand(GLOBAL_RNG.seed)` block
+    # i.e. it behaves as if it was wrapped in a `guardseed(GLOBAL_RNG.seed)` block
     seed = rand(UInt128)
-    srand(seed)
+    Random.seed!(seed)
     a = rand()
     @testset begin
         # global RNG must re-seeded at the beginning of @testset
@@ -752,7 +752,7 @@ end
     end
     # the @testset's above must have no consequence for rand() below
     b = rand()
-    srand(seed)
+    Random.seed!(seed)
     @test a == rand()
     @test b == rand()
 end
@@ -764,38 +764,39 @@ end
         @test_throws InterruptException throw(InterruptException())
     end
 
-    f = tempname()
+    mktemp() do f, _
+        write(f,
+        """
+        using Test
+        @testset begin
+            try
+                @test_throws ErrorException throw(InterruptException())
+            catch e
+                @test e isa InterruptException
+            end
+        end
 
-    write(f,
-    """
-    using Test
-    @testset begin
         try
-            @test_throws ErrorException throw(InterruptException())
+            @testset begin
+                @test 1 == 1
+                throw(InterruptException())
+            end
         catch e
             @test e isa InterruptException
         end
-    end
 
-    try
-        @testset begin
-            @test 1 == 1
-            throw(InterruptException())
+        try
+            @testset for i in 1:1
+                @test 1 == 1
+                throw(InterruptException())
+            end
+        catch e
+            @test e isa InterruptException
         end
-    catch e
-        @test e isa InterruptException
+        """)
+        cmd = `$(Base.julia_cmd()) --startup-file=no --color=no $f`
+        msg = success(pipeline(ignorestatus(cmd), stderr=devnull))
     end
-
-    try
-        @testset for i in 1:1
-            @test 1 == 1
-            throw(InterruptException())
-        end
-    catch e
-        @test e isa InterruptException
-    end
-    """)
-    msg = success(pipeline(ignorestatus(`$(Base.julia_cmd()) --startup-file=no --color=no $f`), stderr=devnull))
 end
 
 @testset "non AbstractTestSet as testset" begin
@@ -812,6 +813,7 @@ end
     msg = read(err, String)
     @test occursin("Expected `desc` to be an AbstractTestSet, it is a String", msg)
     rm(f; force=true)
+    rm(err, force=true)
 end
 
 f25835(;x=nothing) = _f25835(x)

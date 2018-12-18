@@ -28,7 +28,6 @@ end
 # binary GCD (aka Stein's) algorithm
 # about 1.7x (2.1x) faster for random Int64s (Int128s)
 function gcd(a::T, b::T) where T<:Union{Int8,UInt8,Int16,UInt16,Int32,UInt32,Int64,UInt64,Int128,UInt128}
-    @noinline throw1(a, b) = throw(OverflowError("gcd($a, $b) overflows"))
     a == 0 && return abs(b)
     b == 0 && return abs(a)
     za = trailing_zeros(a)
@@ -45,9 +44,10 @@ function gcd(a::T, b::T) where T<:Union{Int8,UInt8,Int16,UInt16,Int32,UInt32,Int
     end
     r = u << k
     # T(r) would throw InexactError; we want OverflowError instead
-    r > typemax(T) && throw1(a, b)
+    r > typemax(T) && __throw_gcd_overflow(a, b)
     r % T
 end
+@noinline __throw_gcd_overflow(a, b) = throw(OverflowError("gcd($a, $b) overflows"))
 
 """
     lcm(x,y)
@@ -169,7 +169,7 @@ end
 invmod(n::Integer, m::Integer) = invmod(promote(n,m)...)
 
 # ^ for any x supporting *
-to_power_type(x) = convert(promote_op(*, typeof(x), typeof(x)), x)
+to_power_type(x) = convert(Base._return_type(*, Tuple{typeof(x), typeof(x)}), x)
 @noinline throw_domerr_powbysq(::Any, p) = throw(DomainError(p,
     string("Cannot raise an integer x to a negative power ", p, '.',
            "\nConvert input to float.")))
@@ -292,7 +292,7 @@ function powermod(x::Integer, p::Integer, m::T) where T<:Integer
     (m == 1 || m == -1) && return zero(m)
     b = oftype(m,mod(x,m))  # this also checks for divide by zero
 
-    t = prevpow2(p)
+    t = prevpow(2, p)
     r::T = 1
     while true
         if p >= t
@@ -309,43 +309,10 @@ end
 # optimization: promote the modulus m to BigInt only once (cf. widemul in generic powermod above)
 powermod(x::Integer, p::Integer, m::Union{Int128,UInt128}) = oftype(m, powermod(x, p, big(m)))
 
-# smallest power of 2 >= x
-
-"""
-    nextpow2(n::Integer)
-
-The smallest power of two not less than `n`. Returns 0 for `n==0`, and returns
-`-nextpow2(-n)` for negative arguments.
-
-# Examples
-```jldoctest
-julia> nextpow2(16)
-16
-
-julia> nextpow2(17)
-32
-```
-"""
-nextpow2(x::Unsigned) = oneunit(x)<<((sizeof(x)<<3)-leading_zeros(x-oneunit(x)))
-nextpow2(x::Integer) = reinterpret(typeof(x),x < 0 ? -nextpow2(unsigned(-x)) : nextpow2(unsigned(x)))
-
-"""
-    prevpow2(n::Integer)
-
-The largest power of two not greater than `n`. Returns 0 for `n==0`, and returns
-`-prevpow2(-n)` for negative arguments.
-
-# Examples
-```jldoctest
-julia> prevpow2(5)
-4
-
-julia> prevpow2(0)
-0
-```
-"""
-prevpow2(x::Unsigned) = one(x) << unsigned((sizeof(x)<<3)-leading_zeros(x)-1)
-prevpow2(x::Integer) = reinterpret(typeof(x),x < 0 ? -prevpow2(unsigned(-x)) : prevpow2(unsigned(x)))
+_nextpow2(x::Unsigned) = oneunit(x)<<((sizeof(x)<<3)-leading_zeros(x-oneunit(x)))
+_nextpow2(x::Integer) = reinterpret(typeof(x),x < 0 ? -_nextpow2(unsigned(-x)) : _nextpow2(unsigned(x)))
+_prevpow2(x::Unsigned) = one(x) << unsigned((sizeof(x)<<3)-leading_zeros(x)-1)
+_prevpow2(x::Integer) = reinterpret(typeof(x),x < 0 ? -_prevpow2(unsigned(-x)) : _prevpow2(unsigned(x)))
 
 """
     ispow2(n::Integer) -> Bool
@@ -387,8 +354,12 @@ julia> nextpow(4, 16)
 See also [`prevpow`](@ref).
 """
 function nextpow(a::Real, x::Real)
-    a <= 1 && throw(DomainError(a, "`a` must be greater than 1."))
     x <= 0 && throw(DomainError(x, "`x` must be positive."))
+    # Special case fast path for x::Integer, a == 2.
+    # This is a very common case. Constant prop will make sure that a call site
+    # specified as `nextpow(2, x)` will get this special case inlined.
+    a == 2 && isa(x, Integer) && return _nextpow2(x)
+    a <= 1 && throw(DomainError(a, "`a` must be greater than 1."))
     x <= 1 && return one(a)
     n = ceil(Integer,log(a, x))
     p = a^(n-1)
@@ -419,8 +390,10 @@ julia> prevpow(4, 16)
 See also [`nextpow`](@ref).
 """
 function prevpow(a::Real, x::Real)
-    a <= 1 && throw(DomainError(a, "`a` must be greater than 1."))
     x < 1 && throw(DomainError(x, "`x` must be ≥ 1."))
+    # See comment in nextpos() for a == special case.
+    a == 2 && isa(x, Integer) && return _prevpow2(x)
+    a <= 1 && throw(DomainError(a, "`a` must be greater than 1."))
     n = floor(Integer,log(a, x))
     p = a^(n+1)
     p <= x ? p : a^n
@@ -467,7 +440,8 @@ function ndigits0znb(x::Integer, b::Integer)
     return d
 end
 
-ndigits0znb(x::Unsigned, b::Integer) = ndigits0znb(signed(x), b)
+# do first division before conversion with signed here, which can otherwise overflow
+ndigits0znb(x::Unsigned, b::Integer) = ndigits0znb(-signed(fld(x, -b)), b) + (x != 0)
 ndigits0znb(x::Bool, b::Integer) = x % Int
 
 # The suffix "pb" stands for "positive base"
@@ -570,11 +544,11 @@ function bin(x::Unsigned, pad::Int, neg::Bool)
     i = neg + max(pad,sizeof(x)<<3-leading_zeros(x))
     a = StringVector(i)
     while i > neg
-        a[i] = '0'+(x&0x1)
+        @inbounds a[i] = 48+(x&0x1)
         x >>= 1
         i -= 1
     end
-    if neg; a[1]='-'; end
+    if neg; @inbounds a[1]=0x2d; end
     String(a)
 end
 
@@ -582,11 +556,11 @@ function oct(x::Unsigned, pad::Int, neg::Bool)
     i = neg + max(pad,div((sizeof(x)<<3)-leading_zeros(x)+2,3))
     a = StringVector(i)
     while i > neg
-        a[i] = '0'+(x&0x7)
+        @inbounds a[i] = 48+(x&0x7)
         x >>= 3
         i -= 1
     end
-    if neg; a[1]='-'; end
+    if neg; @inbounds a[1]=0x2d; end
     String(a)
 end
 
@@ -594,11 +568,11 @@ function dec(x::Unsigned, pad::Int, neg::Bool)
     i = neg + ndigits(x, base=10, pad=pad)
     a = StringVector(i)
     while i > neg
-        a[i] = '0'+rem(x,10)
+        @inbounds a[i] = 48+rem(x,10)
         x = oftype(x,div(x,10))
         i -= 1
     end
-    if neg; a[1]='-'; end
+    if neg; @inbounds a[1]=0x2d; end
     String(a)
 end
 
@@ -607,11 +581,11 @@ function hex(x::Unsigned, pad::Int, neg::Bool)
     a = StringVector(i)
     while i > neg
         d = x & 0xf
-        a[i] = '0'+d+39*(d>9)
+        @inbounds a[i] = 48+d+39*(d>9)
         x >>= 4
         i -= 1
     end
-    if neg; a[1]='-'; end
+    if neg; @inbounds a[1]=0x2d; end
     String(a)
 end
 
@@ -770,17 +744,25 @@ julia> digits!([2,2,2,2,2,2], 10, base = 2)
 ```
 """
 function digits!(a::AbstractVector{T}, n::Integer; base::Integer = 10) where T<:Integer
-    base < 0 && isa(n, Unsigned) && return digits!(a, convert(Signed, n), base = base)
     2 <= abs(base) || throw(ArgumentError("base must be ≥ 2 or ≤ -2, got $base"))
     hastypemax(T) && abs(base) - 1 > typemax(T) &&
         throw(ArgumentError("type $T too small for base $base"))
-    for i in eachindex(a)
-        if base > 0
-            a[i] = rem(n, base)
-            n = div(n, base)
-        else
-            a[i] = mod(n, -base)
-            n = cld(n, base)
+    isempty(a) && return a
+
+    if base > 0
+        for i in eachindex(a)
+            n, d = divrem(n, base)
+            a[i] = d
+        end
+    else
+        # manually peel one loop iteration for type stability
+        n, d = fldmod(n, -base)
+        a[firstindex(a)] = d
+        n = -signed(n)
+        for i in firstindex(a)+1:lastindex(a)
+            n, d = fldmod(n, -base)
+            a[i] = d
+            n = -n
         end
     end
     return a
@@ -827,6 +809,12 @@ Stacktrace:
 julia> factorial(big(21))
 51090942171709440000
 ```
+
+# See also
+* [`binomial`](@ref)
+
+# External links
+* [Factorial](https://en.wikipedia.org/wiki/Factorial) on Wikipedia.
 """
 function factorial(n::Integer)
     n < 0 && throw(DomainError(n, "`n` must be nonnegative."))
@@ -838,9 +826,21 @@ function factorial(n::Integer)
 end
 
 """
-    binomial(n, k)
+    binomial(n::Integer, k::Integer)
 
-Number of ways to choose `k` out of `n` items.
+The _binomial coefficient_ ``\\binom{n}{k}``, being the coefficient of the ``k``th term in
+the polynomial expansion of ``(1+x)^n``.
+
+If ``n`` is non-negative, then it is the number of ways to choose `k` out of `n` items:
+```math
+\\binom{n}{k} = \\frac{n!}{k! (n-k)!}
+```
+where ``n!`` is the [`factorial`](@ref) function.
+
+If ``n`` is negative, then it is defined in terms of the identity
+```math
+\\binom{n}{k} = (-1)^k \\binom{k-n-1}{k}
+```
 
 # Examples
 ```jldoctest
@@ -849,7 +849,16 @@ julia> binomial(5, 3)
 
 julia> factorial(5) ÷ (factorial(5-3) * factorial(3))
 10
+
+julia> binomial(-5, 3)
+-35
 ```
+
+# See also
+* [`factorial`](@ref)
+
+# External links
+* [Binomial coeffient](https://en.wikipedia.org/wiki/Binomial_coefficient) on Wikipedia.
 """
 function binomial(n::T, k::T) where T<:Integer
     n0, k0 = n, k

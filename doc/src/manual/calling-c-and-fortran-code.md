@@ -44,6 +44,11 @@ to [`ccall`](@ref) are as follows:
 
    OR
 
+   a `:function` name symbol or `"function"` name string, which is resolved in the
+   current process,
+
+   OR
+
    a function pointer (for example, from `dlsym`).
 
 2. Return type (see below for mapping the declared C type to Julia)
@@ -130,7 +135,7 @@ Here is a slightly more complex example that discovers the local machine's hostn
 
 ```julia
 function gethostname()
-    hostname = Vector{UInt8}(128)
+    hostname = Vector{UInt8}(undef, 128)
     ccall((:gethostname, "libc"), Int32,
           (Ptr{UInt8}, Csize_t),
           hostname, sizeof(hostname))
@@ -277,7 +282,7 @@ First, a review of some relevant Julia type terminology:
 
 | Syntax / Keyword              | Example                                     | Description                                                                                                                                                                                                                                                                    |
 |:----------------------------- |:------------------------------------------- |:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `mutable struct`              | `String`                                    | "Leaf Type" :: A group of related data that includes a type-tag, is managed by the Julia GC, and is defined by object-identity. The type parameters of a leaf type must be fully defined (no `TypeVars` are allowed) in order for the instance to be constructed.              |
+| `mutable struct`              | `BitSet`                                    | "Leaf Type" :: A group of related data that includes a type-tag, is managed by the Julia GC, and is defined by object-identity. The type parameters of a leaf type must be fully defined (no `TypeVars` are allowed) in order for the instance to be constructed.              |
 | `abstract type`               | `Any`, `AbstractArray{T, N}`, `Complex{T}`  | "Super Type" :: A super-type (not a leaf-type) that cannot be instantiated, but can be used to describe a group of types.                                                                                                                                                      |
 | `T{A}`                        | `Vector{Int}`                               | "Type Parameter" :: A specialization of a type (typically used for dispatch or storage optimization).                                                                                                                                                                          |
 |                               |                                             | "TypeVar" :: The `T` in the type parameter declaration is referred to as a TypeVar (short for type variable).                                                                                                                                                                  |
@@ -287,7 +292,7 @@ First, a review of some relevant Julia type terminology:
 | `struct ...; end`             | `nothing`                                   | "Singleton" :: a Leaf Type or Struct with no fields.                                                                                                                                                                                                                        |
 | `(...)` or `tuple(...)`       | `(1, 2, 3)`                                 | "Tuple" :: an immutable data-structure similar to an anonymous struct type, or a constant array. Represented as either an array or a struct.                                                                                                                                |
 
-### Bits Types:
+### [Bits Types](@id man-bits-types)
 
 There are several special types to be aware of, as no other type can be defined to behave the
 same:
@@ -374,7 +379,7 @@ an `Int` in Julia).
 | `va_arg`                                                |                          |                      | Not supported                                                                                                  |
 | `...` (variadic function specification)                 |                          |                      | `T...` (where `T` is one of the above types, variadic functions of different argument types are not supported) |
 
-The `Cstring` type is essentially a synonym for `Ptr{UInt8}`, except the conversion to `Cstring`
+The [`Cstring`](@ref) type is essentially a synonym for `Ptr{UInt8}`, except the conversion to `Cstring`
 throws an error if the Julia string contains any embedded NUL characters (which would cause the
 string to be silently truncated if the C routine treats NUL as the terminator).  If you are passing
 a `char*` to a C routine that does not assume NUL termination (e.g. because you pass an explicit
@@ -413,7 +418,7 @@ checks and is only meant to improve readability of the call.
     (`void`) but do return, use `Cvoid` instead.
 
 !!! note
-    For `wchar_t*` arguments, the Julia type should be `Cwstring` (if the C routine expects a NUL-terminated
+    For `wchar_t*` arguments, the Julia type should be [`Cwstring`](@ref) (if the C routine expects a NUL-terminated
     string) or `Ptr{Cwchar_t}` otherwise. Note also that UTF-8 string data in Julia is internally
     NUL-terminated, so it can be passed to C functions expecting NUL-terminated data without making
     a copy (but using the `Cwstring` type will cause an error to be thrown if the string itself contains
@@ -486,16 +491,17 @@ the Julia field to be only of that type.
 
 Arrays of parameters can be expressed with `NTuple`:
 
-```
 in C:
+```c
 struct B {
     int A[3];
 };
 b_a_2 = B.A[2];
-
+```
 in Julia:
+```julia
 struct B
-    A::NTuple{3, CInt}
+    A::NTuple{3, Cint}
 end
 b_a_2 = B.A[3]  # note the difference in indexing (1-based in Julia, 0-based in C)
 ```
@@ -734,7 +740,7 @@ end
 ```
 
 The meaning of prefix `&` is not quite the same as in C. In particular, any changes to the referenced
-variables will not be visible in Julia unless the type is mutable (declared via `type`). However,
+variables will not be visible in Julia unless the type is mutable (declared via `mutable struct`). However,
 even for immutable structs it will not cause any harm for called functions to attempt such modifications
 (that is, writing through the passed pointers). Moreover, `&` may be used with any expression,
 such as `&0` or `&f(x)`.
@@ -820,7 +826,7 @@ function sf_bessel_Jn_array(nmin::Integer, nmax::Integer, x::Real)
     if nmax < nmin
         throw(DomainError())
     end
-    result_array = Vector{Cdouble}(nmax - nmin + 1)
+    result_array = Vector{Cdouble}(undef, nmax - nmin + 1)
     errorcode = ccall(
         (:gsl_sf_bessel_Jn_array, :libgsl), # name of C function and library
         Cint,                               # output type
@@ -973,7 +979,7 @@ Other supported conventions are: `stdcall`, `cdecl`, `fastcall`, and `thiscall` 
 signature for Windows:
 
 ```julia
-hn = Vector{UInt8}(256)
+hn = Vector{UInt8}(undef, 256)
 err = ccall(:gethostname, stdcall, Int32, (Ptr{UInt8}, UInt32), hn, length(hn))
 ```
 

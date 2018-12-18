@@ -4,7 +4,7 @@
 
 # for reductions that expand 0 dims to 1
 reduced_index(i::OneTo) = OneTo(1)
-reduced_index(i::Slice) = first(i):first(i)
+reduced_index(i::Union{Slice, IdentityUnitRange}) = first(i):first(i)
 reduced_index(i::AbstractUnitRange) =
     throw(ArgumentError(
 """
@@ -99,6 +99,12 @@ reducedim_initarray(A::AbstractArray, region, init::T) where {T} = reducedim_ini
 promote_union(T::Union) = promote_type(promote_union(T.a), promote_union(T.b))
 promote_union(T) = T
 
+_realtype(::Type{<:Complex}) = Real
+_realtype(::Type{Complex{T}}) where T<:Real = T
+_realtype(T::Type) = T
+_realtype(::Union{typeof(abs),typeof(abs2)}, T) = _realtype(T)
+_realtype(::Any, T) = T
+
 function reducedim_init(f, op::Union{typeof(+),typeof(add_sum)}, A::AbstractArray, region)
     _reducedim_init(f, op, zero, sum, A, region)
 end
@@ -106,7 +112,7 @@ function reducedim_init(f, op::Union{typeof(*),typeof(mul_prod)}, A::AbstractArr
     _reducedim_init(f, op, one, prod, A, region)
 end
 function _reducedim_init(f, op, fv, fop, A, region)
-    T = promote_union(eltype(A))
+    T = _realtype(f, promote_union(eltype(A)))
     if T !== Any && applicable(zero, T)
         x = f(zero(T))
         z = op(fv(x), fv(x))
@@ -141,12 +147,14 @@ for (f1, f2, initval) in ((:min, :max, :Inf), (:max, :min, :(-Inf)))
             # but NaNs need to be avoided as intial values
             v0 = v0 != v0 ? typeof(v0)($initval) : v0
 
-            return reducedim_initarray(A, region, v0)
+            T = _realtype(f, promote_union(eltype(A)))
+            Tr = v0 isa T ? T : typeof(v0)
+            return reducedim_initarray(A, region, v0, Tr)
         end
     end
 end
 reducedim_init(f::Union{typeof(abs),typeof(abs2)}, op::typeof(max), A::AbstractArray{T}, region) where {T} =
-    reducedim_initarray(A, region, zero(f(zero(T))))
+    reducedim_initarray(A, region, zero(f(zero(T))), _realtype(f, T))
 
 reducedim_init(f, op::typeof(&), A::AbstractArray, region) = reducedim_initarray(A, region, true)
 reducedim_init(f, op::typeof(|), A::AbstractArray, region) = reducedim_initarray(A, region, false)
@@ -210,17 +218,20 @@ Extract first entry of slices of array A into existing array R.
 """
 copyfirst!(R::AbstractArray, A::AbstractArray) = mapfirst!(identity, R, A)
 
-function mapfirst!(f, R::AbstractArray, A::AbstractArray)
+function mapfirst!(f, R::AbstractArray, A::AbstractArray{<:Any,N}) where {N}
     lsiz = check_reducedims(R, A)
-    iA = axes(A)
-    iR = axes(R)
-    t = []
-    for i in 1:length(iR)
-        iAi = iA[i]
-        push!(t, iAi == iR[i] ? iAi : first(iAi))
-    end
+    t = _firstreducedslice(axes(R), axes(A))
     map!(f, R, view(A, t...))
 end
+# We know that the axes of R and A are compatible, but R might have a different number of
+# dimensions than A, which is trickier than it seems due to offset arrays and type stability
+_firstreducedslice(::Tuple{}, a::Tuple{}) = ()
+_firstreducedslice(::Tuple, ::Tuple{}) = ()
+@inline _firstreducedslice(::Tuple{}, a::Tuple) = (_firstslice(a[1]), _firstreducedslice((), tail(a))...)
+@inline _firstreducedslice(r::Tuple, a::Tuple) = (length(r[1])==1 ? _firstslice(a[1]) : r[1], _firstreducedslice(tail(r), tail(a))...)
+_firstslice(i::OneTo) = OneTo(1)
+_firstslice(i::Slice) = Slice(_firstslice(i.indices))
+_firstslice(i) = i[firstindex(i):firstindex(i)]
 
 function _mapreducedim!(f, op, R::AbstractArray, A::AbstractArray)
     lsiz = check_reducedims(R,A)
@@ -285,7 +296,7 @@ julia> mapreduce(isodd, *, a, dims=1)
 1×4 Array{Bool,2}:
  false  false  false  false
 
-julia> mapreduce(isodd, |, true, a, dims=1)
+julia> mapreduce(isodd, |, a, dims=1)
 1×4 Array{Bool,2}:
  true  true  true  true
 ```
@@ -635,7 +646,7 @@ for (fname, _fname, op) in [(:sum,     :_sum,     :add_sum), (:prod,    :_prod, 
     @eval begin
         # User-facing methods with keyword arguments
         @inline ($fname)(a::AbstractArray; dims=:) = ($_fname)(a, dims)
-        @inline ($fname)(f::Callable, a::AbstractArray; dims=:) = ($_fname)(f, a, dims)
+        @inline ($fname)(f, a::AbstractArray; dims=:) = ($_fname)(f, a, dims)
 
         # Underlying implementations using dispatch
         ($_fname)(a, ::Colon) = ($_fname)(identity, a, :)

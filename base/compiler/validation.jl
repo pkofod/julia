@@ -16,6 +16,7 @@ const VALID_EXPR_HEADS = IdDict{Any,Any}(
     :the_exception => 0:0,
     :enter => 1:1,
     :leave => 1:1,
+    :pop_exception => 1:1,
     :inbounds => 1:1,
     :boundscheck => 0:0,
     :copyast => 1:1,
@@ -139,7 +140,7 @@ function validate_code!(errors::Vector{>:InvalidCodeError}, c::CodeInfo, is_top_
                 validate_val!(x.args[1])
             elseif head === :call || head === :invoke || head == :gc_preserve_end || head === :meta ||
                 head === :inbounds || head === :foreigncall || head === :cfunction ||
-                head === :const || head === :enter || head === :leave ||
+                head === :const || head === :enter || head === :leave || head == :pop_exception ||
                 head === :method || head === :global || head === :static_parameter ||
                 head === :new || head === :thunk || head === :simdloop ||
                 head === :throw_undef_if_not || head === :unreachable
@@ -229,6 +230,6 @@ function is_valid_rvalue(@nospecialize(x))
     return false
 end
 
-is_valid_return(@nospecialize(x)) = is_valid_argument(x) || (isa(x, Expr) && x.head in (:new, :lambda))
+is_valid_return(@nospecialize(x)) = is_valid_argument(x) || (isa(x, Expr) && x.head === :lambda)
 
 is_flag_set(byte::UInt8, flag::UInt8) = (byte & flag) == flag

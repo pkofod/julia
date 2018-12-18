@@ -123,11 +123,11 @@ end
 function chomp(s::String)
     i = lastindex(s)
     if i < 1 || codeunit(s,i) != 0x0a
-        SubString(s, 1, i)
+        return @inbounds SubString(s, 1, i)
     elseif i < 2 || codeunit(s,i-1) != 0x0d
-        SubString(s, 1, prevind(s, i))
+        return @inbounds SubString(s, 1, prevind(s, i))
     else
-        SubString(s, 1, prevind(s, i-1))
+        return @inbounds SubString(s, 1, prevind(s, i-1))
     end
 end
 
@@ -156,7 +156,7 @@ julia> lstrip(a)
 function lstrip(f, s::AbstractString)
     e = lastindex(s)
     for (i, c) in pairs(s)
-        !f(c) && return SubString(s, i, e)
+        !f(c) && return @inbounds SubString(s, i, e)
     end
     SubString(s, e+1, e)
 end
@@ -187,7 +187,7 @@ julia> rstrip(a)
 """
 function rstrip(f, s::AbstractString)
     for (i, c) in Iterators.reverse(pairs(s))
-        f(c) || return SubString(s, 1, i)
+        f(c) || return @inbounds SubString(s, 1, i)
     end
     SubString(s, 1, 0)
 end
@@ -302,27 +302,15 @@ julia> split(a,".")
 function split end
 
 function split(str::T, splitter;
-               limit::Integer=0, keepempty::Bool=true, keep::Union{Nothing,Bool}=nothing) where {T<:AbstractString}
-    if keep !== nothing
-        Base.depwarn("The `keep` keyword argument is deprecated; use `keepempty` instead", :split)
-        keepempty = keep
-    end
+               limit::Integer=0, keepempty::Bool=true) where {T<:AbstractString}
     _split(str, splitter, limit, keepempty, T <: SubString ? T[] : SubString{T}[])
 end
 function split(str::T, splitter::Union{Tuple{Vararg{<:AbstractChar}},AbstractVector{<:AbstractChar},Set{<:AbstractChar}};
-               limit::Integer=0, keepempty::Bool=true, keep::Union{Nothing,Bool}=nothing) where {T<:AbstractString}
-    if keep !== nothing
-        Base.depwarn("The `keep` keyword argument is deprecated; use `keepempty` instead", :split)
-        keepempty = keep
-    end
+               limit::Integer=0, keepempty::Bool=true) where {T<:AbstractString}
     _split(str, in(splitter), limit, keepempty, T <: SubString ? T[] : SubString{T}[])
 end
 function split(str::T, splitter::AbstractChar;
-               limit::Integer=0, keepempty::Bool=true, keep::Union{Nothing,Bool}=nothing) where {T<:AbstractString}
-    if keep !== nothing
-        Base.depwarn("The `keep` keyword argument is deprecated; use `keepempty` instead", :split)
-        keepempty = keep
-    end
+               limit::Integer=0, keepempty::Bool=true) where {T<:AbstractString}
     _split(str, isequal(splitter), limit, keepempty, T <: SubString ? T[] : SubString{T}[])
 end
 
@@ -335,7 +323,7 @@ function _split(str::AbstractString, splitter, limit::Integer, keepempty::Bool, 
         while 0 < j <= n && length(strs) != limit-1
             if i < k
                 if keepempty || i < j
-                    push!(strs, SubString(str,i,prevind(str,j)))
+                    push!(strs, @inbounds SubString(str,i,prevind(str,j)))
                 end
                 i = k
             end
@@ -346,7 +334,7 @@ function _split(str::AbstractString, splitter, limit::Integer, keepempty::Bool, 
         end
     end
     if keepempty || i <= ncodeunits(str)
-        push!(strs, SubString(str,i))
+        push!(strs, @inbounds SubString(str,i))
     end
     return strs
 end
@@ -388,27 +376,15 @@ julia> rsplit(a,".";limit=2)
 function rsplit end
 
 function rsplit(str::T, splitter;
-                limit::Integer=0, keepempty::Bool=true, keep::Union{Nothing,Bool}=nothing) where {T<:AbstractString}
-    if keep !== nothing
-        Base.depwarn("The `keep` keyword argument is deprecated; use `keepempty` instead", :rsplit)
-        keepempty = keep
-    end
+                limit::Integer=0, keepempty::Bool=true) where {T<:AbstractString}
     _rsplit(str, splitter, limit, keepempty, T <: SubString ? T[] : SubString{T}[])
 end
 function rsplit(str::T, splitter::Union{Tuple{Vararg{<:AbstractChar}},AbstractVector{<:AbstractChar},Set{<:AbstractChar}};
-                limit::Integer=0, keepempty::Bool=true, keep::Union{Nothing,Bool}=nothing) where {T<:AbstractString}
-    if keep !== nothing
-        Base.depwarn("The `keep` keyword argument is deprecated; use `keepempty` instead", :rsplit)
-        keepempty = keep
-    end
+                limit::Integer=0, keepempty::Bool=true) where {T<:AbstractString}
     _rsplit(str, in(splitter), limit, keepempty, T <: SubString ? T[] : SubString{T}[])
 end
 function rsplit(str::T, splitter::AbstractChar;
-                limit::Integer=0, keepempty::Bool=true, keep::Union{Nothing,Bool}=nothing) where {T<:AbstractString}
-    if keep !== nothing
-        Base.depwarn("The `keep` keyword argument is deprecated; use `keepempty` instead", :rsplit)
-        keepempty = keep
-    end
+                limit::Integer=0, keepempty::Bool=true) where {T<:AbstractString}
     _rsplit(str, isequal(splitter), limit, keepempty, T <: SubString ? T[] : SubString{T}[])
 end
 
@@ -417,7 +393,7 @@ function _rsplit(str::AbstractString, splitter, limit::Integer, keepempty::Bool,
     r = something(findlast(splitter, str), 0)
     j, k = first(r), last(r)
     while j > 0 && k > 0 && length(strs) != limit-1
-        (keepempty || k < n) && pushfirst!(strs, SubString(str,nextind(str,k),n))
+        (keepempty || k < n) && pushfirst!(strs, @inbounds SubString(str,nextind(str,k),n))
         n = prevind(str, j)
         r = something(findprev(splitter,str,n), 0)
         j, k = first(r), last(r)
@@ -607,10 +583,9 @@ function bytes2hex end
 
 function bytes2hex(a::AbstractArray{UInt8})
     b = Base.StringVector(2*length(a))
-    i = 0
-    for x in a
-        b[i += 1] = hex_chars[1 + x >> 4]
-        b[i += 1] = hex_chars[1 + x & 0xf]
+    @inbounds for (i, x) in enumerate(a)
+        b[2i - 1] = hex_chars[1 + x >> 4]
+        b[2i    ] = hex_chars[1 + x & 0xf]
     end
     return String(b)
 end
@@ -621,14 +596,13 @@ bytes2hex(io::IO, a::AbstractArray{UInt8}) =
     end
 
 # check for pure ASCII-ness
-
 function ascii(s::String)
-    for i = 1:sizeof(s)
-        b = codeunit(s,i)
-        b < 0x80 || throw(ArgumentError("invalid ASCII at index $i in $(repr(s))"))
+    for i in 1:sizeof(s)
+        @inbounds codeunit(s, i) < 0x80 || __throw_invalid_ascii(s, i)
     end
     return s
 end
+@noinline __throw_invalid_ascii(s, i) = throw(ArgumentError("invalid ASCII at index $i in $(repr(s))"))
 
 """
     ascii(s::AbstractString)

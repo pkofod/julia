@@ -1,7 +1,5 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
-__precompile__(true)
-
 module Random
 
 include("DSFMT.jl")
@@ -17,8 +15,7 @@ using Serialization
 import Serialization: serialize, deserialize
 import Base: rand, randn
 
-export srand,
-       rand!, randn!,
+export rand!, randn!,
        randexp, randexp!,
        bitrand,
        randstring,
@@ -26,9 +23,7 @@ export srand,
        shuffle, shuffle!,
        randperm, randperm!,
        randcycle, randcycle!,
-       AbstractRNG, MersenneTwister, RandomDevice,
-       randjump
-
+       AbstractRNG, MersenneTwister, RandomDevice
 
 ## general definitions
 
@@ -222,6 +217,8 @@ rand(rng::AbstractRNG, ::UniformT{T}) where {T} = rand(rng, T)
 #### scalars
 
 rand(rng::AbstractRNG, X)                                      = rand(rng, Sampler(rng, X, Val(1)))
+# this is needed to disambiguate
+rand(rng::AbstractRNG, X::Dims)                                = rand(rng, Sampler(rng, X, Val(1)))
 rand(rng::AbstractRNG=GLOBAL_RNG, ::Type{X}=Float64) where {X} = rand(rng, Sampler(rng, X, Val(1)))
 
 rand(X)                   = rand(GLOBAL_RNG, X)
@@ -265,7 +262,7 @@ rand(                ::Type{X}, d::Integer, dims::Integer...) where {X} = rand(X
 
 function __init__()
     try
-        srand()
+        seed!()
     catch ex
         Base.showerror_nostdio(ex,
             "WARNING: Error during initialization of module Random")
@@ -276,9 +273,8 @@ include("RNGs.jl")
 include("generation.jl")
 include("normal.jl")
 include("misc.jl")
-include("deprecated.jl")
 
-## rand & rand! & srand docstrings
+## rand & rand! & seed! docstrings
 
 """
     rand([rng=GLOBAL_RNG], [S], [dims...])
@@ -286,15 +282,17 @@ include("deprecated.jl")
 Pick a random element or array of random elements from the set of values specified by `S`;
 `S` can be
 
-* an indexable collection (for example `1:n` or `['x','y','z']`),
+* an indexable collection (for example `1:9` or `('x', "y", :z)`),
 * an `AbstractDict` or `AbstractSet` object,
 * a string (considered as a collection of characters), or
 * a type: the set of values to pick from is then equivalent to `typemin(S):typemax(S)` for
   integers (this is not applicable to [`BigInt`](@ref)), and to ``[0, 1)`` for floating
   point numbers;
 
-`S` defaults to [`Float64`](@ref)
-(except when `dims` is a tuple of integers, in which case `S` must be specified).
+`S` defaults to [`Float64`](@ref).
+
+!!! compat "Julia 1.1"
+    Support for `S` as a tuple requires at least Julia 1.1.
 
 # Examples
 ```julia-repl
@@ -342,25 +340,25 @@ julia> rand!(rng, zeros(5))
 rand!
 
 """
-    srand([rng=GLOBAL_RNG], seed) -> rng
-    srand([rng=GLOBAL_RNG]) -> rng
+    seed!([rng=GLOBAL_RNG], seed) -> rng
+    seed!([rng=GLOBAL_RNG]) -> rng
 
 Reseed the random number generator: `rng` will give a reproducible
 sequence of numbers if and only if a `seed` is provided. Some RNGs
 don't accept a seed, like `RandomDevice`.
-After the call to `srand`, `rng` is equivalent to a newly created
+After the call to `seed!`, `rng` is equivalent to a newly created
 object initialized with the same seed.
 
 # Examples
 ```julia-repl
-julia> srand(1234);
+julia> Random.seed!(1234);
 
 julia> x1 = rand(2)
 2-element Array{Float64,1}:
  0.590845
  0.766797
 
-julia> srand(1234);
+julia> Random.seed!(1234);
 
 julia> x2 = rand(2)
 2-element Array{Float64,1}:
@@ -373,19 +371,19 @@ true
 julia> rng = MersenneTwister(1234); rand(rng, 2) == x1
 true
 
-julia> MersenneTwister(1) == srand(rng, 1)
+julia> MersenneTwister(1) == Random.seed!(rng, 1)
 true
 
-julia> rand(srand(rng), Bool) # not reproducible
+julia> rand(Random.seed!(rng), Bool) # not reproducible
 true
 
-julia> rand(srand(rng), Bool)
+julia> rand(Random.seed!(rng), Bool)
 false
 
 julia> rand(MersenneTwister(), Bool) # not reproducible either
 true
 ```
 """
-srand(rng::AbstractRNG, ::Nothing) = srand(rng)
+seed!(rng::AbstractRNG, ::Nothing) = seed!(rng)
 
 end # module

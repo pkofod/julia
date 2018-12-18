@@ -79,7 +79,7 @@ end
     @specialize
 
 Reset the specialization hint for an argument back to the default.
-For details, see [`@specialize`](@ref).
+For details, see [`@nospecialize`](@ref).
 """
 macro specialize(vars...)
     if nfields(vars) === 1
@@ -115,7 +115,7 @@ julia> convert(Int, 3.0)
 3
 
 julia> convert(Int, 3.5)
-ERROR: InexactError: Int64(Int64, 3.5)
+ERROR: InexactError: Int64(3.5)
 Stacktrace:
 [...]
 ```
@@ -264,10 +264,21 @@ function typename(a::Union)
 end
 typename(union::UnionAll) = typename(union.body)
 
-convert(::Type{T}, x::T) where {T<:Tuple{Any, Vararg{Any}}} = x
-convert(::Type{Tuple{}}, x::Tuple{Any, Vararg{Any}}) = throw(MethodError(convert, (Tuple{}, x)))
-convert(::Type{T}, x::Tuple{Any, Vararg{Any}}) where {T<:Tuple} =
+const AtLeast1 = Tuple{Any, Vararg{Any}}
+
+# converting to empty tuple type
+convert(::Type{Tuple{}}, ::Tuple{}) = ()
+convert(::Type{Tuple{}}, x::AtLeast1) = throw(MethodError(convert, (Tuple{}, x)))
+
+# converting to tuple types with at least one element
+convert(::Type{T}, x::T) where {T<:AtLeast1} = x
+convert(::Type{T}, x::AtLeast1) where {T<:AtLeast1} =
     (convert(tuple_type_head(T), x[1]), convert(tuple_type_tail(T), tail(x))...)
+
+# converting to Vararg tuple types
+convert(::Type{Tuple{Vararg{V}}}, x::Tuple{Vararg{V}}) where {V} = x
+convert(T::Type{Tuple{Vararg{V}}}, x::Tuple) where {V} =
+    (convert(tuple_type_head(T), x[1]), convert(T, tail(x))...)
 
 # TODO: the following definitions are equivalent (behaviorally) to the above method
 # I think they may be faster / more efficient for inference,
@@ -324,11 +335,6 @@ oftype(x, y) = convert(typeof(x), y)
 
 unsigned(x::Int) = reinterpret(UInt, x)
 signed(x::UInt) = reinterpret(Int, x)
-
-# conversions used by ccall
-ptr_arg_cconvert(::Type{Ptr{T}}, x) where {T} = cconvert(T, x)
-ptr_arg_unsafe_convert(::Type{Ptr{T}}, x) where {T} = unsafe_convert(T, x)
-ptr_arg_unsafe_convert(::Type{Ptr{Cvoid}}, x) = x
 
 """
     cconvert(T,x)
@@ -408,27 +414,6 @@ Stacktrace:
 ```
 """
 sizeof(x) = Core.sizeof(x)
-
-function append_any(xs...)
-    # used by apply() and quote
-    # must be a separate function from append(), since apply() needs this
-    # exact function.
-    out = Vector{Any}(undef, 4)
-    l = 4
-    i = 1
-    for x in xs
-        for y in x
-            if i > l
-                _growend!(out, 16)
-                l += 16
-            end
-            arrayset(true, out, y, i)
-            i += 1
-        end
-    end
-    _deleteend!(out, l-i+1)
-    out
-end
 
 # simple Array{Any} operations needed for bootstrap
 @eval setindex!(A::Array{Any}, @nospecialize(x), i::Int) = arrayset($(Expr(:boundscheck)), A, x, i)
@@ -635,6 +620,72 @@ function isassigned(v::SimpleVector, i::Int)
     return x != C_NULL
 end
 
+
+# used by ... syntax to access the `iterate` function from inside the Core._apply implementation
+# must be a separate function from append(), since Core._apply needs this exact function
+function append_any(xs...)
+    @nospecialize
+    lx = length(xs)
+    l = 4
+    i = 1
+    out = Vector{Any}(undef, l)
+    for xi in 1:lx
+        x = @inbounds xs[xi]
+        # handle some common cases, where we know the length
+        # and can inline the iterator because the runtime
+        # has an optimized version of the iterator
+        if x isa SimpleVector
+            lx = length(x)
+            if i + lx - 1 > l
+                ladd = lx > 16 ? lx : 16
+                _growend!(out, ladd)
+                l += ladd
+            end
+            for j in 1:lx
+                y = @inbounds x[j]
+                arrayset(true, out, y, i)
+                i += 1
+            end
+        elseif x isa Tuple
+            lx = length(x)
+            if i + lx - 1 > l
+                ladd = lx > 16 ? lx : 16
+                _growend!(out, ladd)
+                l += ladd
+            end
+            for j in 1:lx
+                y = @inbounds x[j]
+                arrayset(true, out, y, i)
+                i += 1
+            end
+        elseif x isa Array
+            lx = length(x)
+            if i + lx - 1 > l
+                ladd = lx > 16 ? lx : 16
+                _growend!(out, ladd)
+                l += ladd
+            end
+            for j in 1:lx
+                y = arrayref(true, x, j)
+                arrayset(true, out, y, i)
+                i += 1
+            end
+        else
+            for y in x
+                if i > l
+                    _growend!(out, 16)
+                    l += 16
+                end
+                arrayset(true, out, y, i)
+                i += 1
+            end
+        end
+    end
+    _deleteend!(out, l - i + 1)
+    return out
+end
+
+
 """
     Colon()
 
@@ -694,43 +745,6 @@ function invokelatest(@nospecialize(f), @nospecialize args...; kwargs...)
     inner() = f(args...; kwargs...)
     Core._apply_latest(inner)
 end
-
-# iteration protocol
-
-"""
-    next(iter, state) -> item, state
-
-For a given iterable object and iteration state, return the current item and the next iteration state.
-
-# Examples
-```jldoctest
-julia> next(1:5, 3)
-(3, 4)
-
-julia> next(1:5, 5)
-(5, 6)
-```
-"""
-function next end
-
-"""
-    start(iter) -> state
-
-Get initial iteration state for an iterable object.
-
-# Examples
-```jldoctest
-julia> start(1:5)
-1
-
-julia> start([1;2;3])
-1
-
-julia> start([4;2;3])
-1
-```
-"""
-function start end
 
 """
     isempty(collection) -> Bool
@@ -837,72 +851,11 @@ isdone(itr, state...) = missing
     iterate(iter [, state]) -> Union{Nothing, Tuple{Any, Any}}
 
 Advance the iterator to obtain the next element. If no elements
-remain, nothing should be returned. Otherwise, a 2-tuple of the
+remain, `nothing` should be returned. Otherwise, a 2-tuple of the
 next element and the new iteration state should be returned.
 """
 function iterate end
 
-# Compatibility with old iteration protocol
-function iterate(x, state)
-    @_inline_meta
-    done(x, state) && return nothing
-    return next(x, state)
-end
-const old_iterate_line_prev = (@__LINE__)
-iterate(x) = (@_inline_meta; iterate(x, start(x)))
-
-struct LegacyIterationCompat{I,T,S}
-    done::Bool
-    nextval::T
-    state::S
-    LegacyIterationCompat{I,T,S}() where {I,T,S} = new{I,T,S}(true)
-    LegacyIterationCompat{I,T,S}(nextval::T, state::S) where {I,T,S} = new{I,T,S}(false, nextval, state)
-end
-
-function has_non_default_iterate(T)
-    world = ccall(:jl_get_world_counter, UInt, ())
-    mt = Base._methods(iterate, Tuple{T}, -1, world)
-    # Check if this is the above method
-    if (mt[1][3].file == @__FILE_SYMBOL__) && (mt[1][3].line == old_iterate_line_prev + 1)
-        return false
-    end
-    return true
-end
-
-const compat_start_line_prev = (@__LINE__)
-function start(itr::T) where {T}
-    has_non_default_iterate(T) || throw(MethodError(iterate, (itr,)))
-    y = iterate(itr)
-    y === nothing && return LegacyIterationCompat{T, Union{}, Union{}}()
-    val, state = y
-    LegacyIterationCompat{T, typeof(val), typeof(state)}(val, state)
-end
-
-function next(itr::I, state::LegacyIterationCompat{I,T,S}) where {I,T,S}
-    val, state = state.nextval, state.state
-    y = iterate(itr, state)
-    if y === nothing
-        return (val, LegacyIterationCompat{I,T,S}())
-    end
-    nextval, state = y
-    val, LegacyIterationCompat{I, typeof(nextval), typeof(state)}(nextval, state)
-end
-
-done(itr::I, state::LegacyIterationCompat{I,T,S}) where {I,T,S} = (@_inline_meta; state.done)
-# This is necessary to support the above compatibility layer,
-# eventually, this should just check for applicability of `iterate`
 function isiterable(T)::Bool
-    if !has_non_default_iterate(T)
-        world = ccall(:jl_get_world_counter, UInt, ())
-        mt = Base._methods(start, Tuple{T}, -1, world)
-        # Check if this is the fallback start method
-        if (mt[1][3].file == @__FILE_SYMBOL__) && (mt[1][3].line == compat_start_line_prev + 2)
-            return false
-        end
-    end
-    return true
+    return hasmethod(iterate, Tuple{T})
 end
-
-# This is required to avoid massive performance problems
-# due to the start(s::AbstractString) deprecation.
-iterate(s::AbstractString) = iterate(s, firstindex(s))

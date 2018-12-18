@@ -104,7 +104,7 @@ function ipv6_field(ip::IPv6,i)
     if i < 0 || i > 7
         throw(BoundsError())
     end
-    UInt16(ip.host&(UInt128(0xFFFF)<<(i*16))>>(i*16))
+    UInt16((ip.host&(UInt128(0xFFFF)<<(i*16))) >> (i*16))
 end
 
 show(io::IO, ip::IPv6) = print(io,"ip\"",ip,"\"")
@@ -251,3 +251,9 @@ struct InetAddr{T<:IPAddr}
 end
 
 InetAddr(ip::IPAddr, port) = InetAddr{typeof(ip)}(ip, port)
+function show(io::IO, addr::InetAddr)
+    show(io, typeof(addr))
+    print(io, "(")
+    show(io, addr.host)
+    print(io, ", ", Int(addr.port), ")")
+end

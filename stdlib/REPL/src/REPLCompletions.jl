@@ -246,7 +246,7 @@ function complete_path(path::AbstractString, pos; use_envpath=false)::Completion
                     continue
                 else
                     # We only handle SystemErrors here
-                    rethrow(e)
+                    rethrow()
                 end
             end
 
@@ -444,11 +444,6 @@ function complete_methods(ex_org::Expr, context_module=Main)::Vector{Completion}
     for method in ml
         ms = method.sig
 
-        # Do not suggest the default method from sysimg.jl.
-        if Base.is_default_method(method)
-            continue
-        end
-
         # Check if the method's type signature intersects the input types
         if typeintersect(Base.rewrap_unionall(Tuple{Base.unwrap_unionall(ms).parameters[1 : min(na, end)]...}, ms), t_in) != Union{}
             push!(out, MethodCompletion(func, t_in, method, kwtype))
@@ -527,7 +522,7 @@ function dict_identifier_key(str,tag)
         # Avoid `isdefined(::Array, ::Symbol)`
         isa(obj, Array) && return (nothing, nothing, nothing)
     end
-    begin_of_key = first(findnext(r"\S", str, nextind(str, end_of_identifier) + 1)) # 1 for [
+    begin_of_key = first(something(findnext(r"\S", str, nextind(str, end_of_identifier) + 1), 1)) # 1 for [
     begin_of_key==0 && return (true, nothing, nothing)
     partial_key = str[begin_of_key:end]
     (isa(obj, AbstractDict) && length(obj) < 1e6) || return (true, nothing, nothing)
@@ -670,7 +665,7 @@ function completions(string, pos, context_module=Main)::Completions
                 end
             end
         end
-        ffunc = (mod,x)->(isdefined(mod, x) && isa(getfield(mod, x), Module))
+        ffunc = (mod,x)->(Base.isbindingresolved(mod, x) && isdefined(mod, x) && isa(getfield(mod, x), Module))
         comp_keywords = false
     end
     startpos == 0 && (pos = -1)

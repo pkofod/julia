@@ -154,6 +154,11 @@ end
             end
         end
 
+        let xr = sprandn(ComplexF64, 1000, 0.9)
+            @test isa(xr, SparseVector{ComplexF64,Int})
+            @test length(xr) == 1000
+        end
+
         let xr = sprand(Bool, 1000, 0.9)
             @test isa(xr, SparseVector{Bool,Int})
             @test length(xr) == 1000
@@ -1027,7 +1032,7 @@ end
 end
 
 @testset "dropzeros[!] with length=$m" for m in (10, 20, 30)
-    srand(123)
+    Random.seed!(123)
     nzprob, targetnumposzeros, targetnumnegzeros = 0.4, 5, 5
     v = sprand(m, nzprob)
     struczerosv = findall(x -> x == 0, v)

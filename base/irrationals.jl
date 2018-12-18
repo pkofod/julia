@@ -136,18 +136,29 @@ end
 
 round(x::Irrational, r::RoundingMode) = round(float(x), r)
 
+"""
+	@irrational sym val def
+	@irrational(sym, val, def)
+
+Define a new `Irrational` value, `sym`, with pre-computed `Float64` value `val`,
+and arbitrary-precision definition in terms of `BigFloat`s given be the expression `def`.
+"""
 macro irrational(sym, val, def)
     esym = esc(sym)
     qsym = esc(Expr(:quote, sym))
     bigconvert = isa(def,Symbol) ? quote
-        function Base.BigFloat(::Irrational{$qsym})
-            c = BigFloat()
+        function Base.BigFloat(::Irrational{$qsym}, r::MPFR.MPFRRoundingMode=MPFR.ROUNDING_MODE[]; precision=precision(BigFloat))
+            c = BigFloat(;precision=precision)
             ccall(($(string("mpfr_const_", def)), :libmpfr),
-                  Cint, (Ref{BigFloat}, Int32), c, MPFR.ROUNDING_MODE[])
+                  Cint, (Ref{BigFloat}, MPFR.MPFRRoundingMode), c, r)
             return c
         end
     end : quote
-        Base.BigFloat(::Irrational{$qsym}) = $(esc(def))
+        function Base.BigFloat(::Irrational{$qsym}; precision=precision(BigFloat))
+            setprecision(BigFloat, precision) do
+                $(esc(def))
+            end
+        end
     end
     quote
         const $esym = Irrational{$qsym}()

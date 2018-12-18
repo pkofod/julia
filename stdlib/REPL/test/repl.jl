@@ -7,8 +7,8 @@ import REPL.LineEdit
 using Markdown
 
 const BASE_TEST_PATH = joinpath(Sys.BINDIR, "..", "share", "julia", "test")
-isdefined(Main, :TestHelpers) || @eval Main include(joinpath($(BASE_TEST_PATH), "TestHelpers.jl"))
-import .Main.TestHelpers
+isdefined(Main, :FakePTYs) || @eval Main include(joinpath($(BASE_TEST_PATH), "testhelpers", "FakePTYs.jl"))
+import .Main.FakePTYs: with_fake_pty
 
 # For curmod_*
 include(joinpath(BASE_TEST_PATH, "testenv.jl"))
@@ -58,7 +58,7 @@ function fake_repl(@nospecialize(f); options::REPL.Options=REPL.Options(confirm_
     end
     @test read(err.out, String) == ""
     #display(read(output.out, String))
-    Base._wait(t)
+    Base.wait(t)
     close(hard_kill)
     nothing
 end
@@ -300,7 +300,7 @@ fake_repl() do stdin_write, stdout_read, repl
 
     # Close REPL ^D
     write(stdin_write, '\x04')
-    Base._wait(repltask)
+    Base.wait(repltask)
 
     nothing
 end
@@ -601,6 +601,16 @@ for prompt = ["TestΠ", () -> randstring(rand(1:10))]
         @test buffercontents(LineEdit.buffer(s)) == "x ΔxΔ"
         @test position(LineEdit.buffer(s)) == 0
 
+        LineEdit.edit_clear(s)
+        LineEdit.enter_search(s, histp, true)
+        ss = LineEdit.state(s, histp)
+        write(ss.query_buffer, "Å") # should not be in history
+        LineEdit.update_display_buffer(ss, ss)
+        @test buffercontents(ss.response_buffer) == ""
+        @test position(ss.response_buffer) == 0
+        LineEdit.history_next_result(s, ss) # should not throw BoundsError
+        LineEdit.accept_result(s, histp)
+
         # Try entering search mode while in custom repl mode
         LineEdit.enter_search(s, custom_histp, true)
     end
@@ -671,7 +681,7 @@ fake_repl() do stdin_write, stdout_read, repl
 
     # Close repl
     write(stdin_write, '\x04')
-    Base._wait(repltask)
+    Base.wait(repltask)
 end
 
 # Simple non-standard REPL tests
@@ -711,7 +721,7 @@ fake_repl() do stdin_write, stdout_read, repl
     @test wait(c) == "a"
     # Close REPL ^D
     write(stdin_write, '\x04')
-    Base._wait(repltask)
+    Base.wait(repltask)
 end
 
 ccall(:jl_exit_on_sigint, Cvoid, (Cint,), 1)
@@ -719,22 +729,22 @@ ccall(:jl_exit_on_sigint, Cvoid, (Cint,), 1)
 let exename = Base.julia_cmd()
     # Test REPL in dumb mode
     if !Sys.iswindows()
-        TestHelpers.with_fake_pty() do slave, master
+        with_fake_pty() do pty_slave, pty_master
             nENV = copy(ENV)
             nENV["TERM"] = "dumb"
-            p = run(setenv(`$exename --startup-file=no -q`,nENV),slave,slave,slave,wait=false)
-            output = readuntil(master,"julia> ",keep=true)
+            p = run(setenv(`$exename --startup-file=no -q`,nENV),pty_slave,pty_slave,pty_slave,wait=false)
+            output = readuntil(pty_master,"julia> ",keep=true)
             if ccall(:jl_running_on_valgrind,Cint,()) == 0
                 # If --trace-children=yes is passed to valgrind, we will get a
                 # valgrind banner here, not just the prompt.
                 @test output == "julia> "
             end
-            write(master,"1\nexit()\n")
+            write(pty_master,"1\nexit()\n")
 
             wait(p)
-            output = readuntil(master,' ',keep=true)
+            output = readuntil(pty_master,' ',keep=true)
             @test output == "1\r\nexit()\r\n1\r\n\r\njulia> "
-            @test bytesavailable(master) == 0
+            @test bytesavailable(pty_master) == 0
         end
     end
 
@@ -882,7 +892,7 @@ for keys = [altkeys, merge(altkeys...)],
 
             # Close REPL ^D
             write(stdin_write, '\x04')
-            Base._wait(repltask)
+            Base.wait(repltask)
 
             # Close the history file
             # (otherwise trying to delete it fails on Windows)
@@ -938,7 +948,7 @@ fake_repl() do stdin_write, stdout_read, repl
 
     # Close REPL ^D
     write(stdin_write, '\x04')
-    Base._wait(repltask)
+    Base.wait(repltask)
 end
 
 # Docs.helpmode tests: we test whether the correct expressions are being generated here,
@@ -975,5 +985,5 @@ fake_repl() do stdin_write, stdout_read, repl
     readline(stdout_read)
     @test readline(stdout_read) == "\e[0m:((Base.Math.float)(_1))"
     write(stdin_write, '\x04')
-    Base._wait(repltask)
+    Base.wait(repltask)
 end

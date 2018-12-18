@@ -67,6 +67,7 @@ mutable struct Worker
     manager::ClusterManager
     config::WorkerConfig
     version::Union{VersionNumber, Nothing}   # Julia version of the remote process
+    initialized::Event
 
     function Worker(id::Int, r_stream::IO, w_stream::IO, manager::ClusterManager;
                              version::Union{VersionNumber, Nothing}=nothing,
@@ -90,6 +91,7 @@ mutable struct Worker
             return map_pid_wrkr[id]
         end
         w=new(id, [], [], false, W_CREATED, Condition(), time(), conn_func)
+        w.initialized = Event()
         register_worker(w)
         w
     end
@@ -134,7 +136,7 @@ function exec_conn_func(w::Worker)
         f()
     catch e
         w.conn_func = () -> throw(e)
-        rethrow(e)
+        rethrow()
     end
     nothing
 end
@@ -159,12 +161,6 @@ mutable struct LocalProcess
     bind_port::UInt16
     cookie::AbstractString
     LocalProcess() = new(1)
-end
-
-
-import LinearAlgebra
-function disable_threaded_libs()
-    LinearAlgebra.BLAS.set_num_threads(1)
 end
 
 worker_timeout() = parse(Float64, get(ENV, "JULIA_WORKER_TIMEOUT", "60.0"))
@@ -419,7 +415,7 @@ function addprocs_locked(manager::ClusterManager; kwargs...)
         end
     end
 
-    Base._wait(t_launch)      # catches any thrown errors from the launch task
+    Base.wait(t_launch)      # catches any thrown errors from the launch task
 
     # Since all worker-to-worker setups may not have completed by the time this
     # function returns to the caller, send the complete list to all workers.
@@ -503,9 +499,9 @@ function create_worker(manager, wconfig)
     local r_s, w_s
     try
         (r_s, w_s) = connect(manager, w.id, wconfig)
-    catch e
+    catch
         deregister_worker(w.id)
-        rethrow(e)
+        rethrow()
     end
 
     w = Worker(w.id, r_s, w_s, manager; config=wconfig)
@@ -644,7 +640,7 @@ end
 
 Return the cluster cookie.
 """
-cluster_cookie() = LPROC.cookie
+cluster_cookie() = (init_multi(); LPROC.cookie)
 
 """
     cluster_cookie(cookie) -> cookie
@@ -652,6 +648,7 @@ cluster_cookie() = LPROC.cookie
 Set the passed cookie as the cluster cookie, then returns it.
 """
 function cluster_cookie(cookie)
+    init_multi()
     # The cookie must be an ASCII string with length <=  HDR_COOKIE_LEN
     @assert isascii(cookie)
     @assert length(cookie) <= HDR_COOKIE_LEN
@@ -684,10 +681,6 @@ end
 const PGRP = ProcessGroup([])
 
 function topology(t)
-    if t == :master_slave
-        Base.depwarn("The topology :master_slave is deprecated, use :master_worker instead.", :topology)
-        t = :master_worker
-    end
     @assert t in [:all_to_all, :master_worker, :custom]
     if (PGRP.topology==t) || ((myid()==1) && (nprocs()==1)) || (myid() > 1)
         PGRP.topology = t
@@ -723,6 +716,15 @@ const map_del_wrkr = Set{Int}()
     myid()
 
 Get the id of the current process.
+
+# Examples
+```julia-repl
+julia> myid()
+1
+
+julia> remotecall_fetch(() -> myid(), 4)
+4
+```
 """
 myid() = LPROC.id
 
@@ -730,6 +732,17 @@ myid() = LPROC.id
     nprocs()
 
 Get the number of available processes.
+
+# Examples
+```julia-repl
+julia> nprocs()
+3
+
+julia> workers()
+5-element Array{Int64,1}:
+ 2
+ 3
+```
 """
 function nprocs()
     if myid() == 1 || (PGRP.topology == :all_to_all && !isclusterlazy())
@@ -749,8 +762,19 @@ end
 """
     nworkers()
 
-Get the number of available worker processes. This is one less than `nprocs()`. Equal to
+Get the number of available worker processes. This is one less than [`nprocs()`](@ref). Equal to
 `nprocs()` if `nprocs() == 1`.
+
+# Examples
+```julia-repl
+\$ julia -p 5
+
+julia> nprocs()
+6
+
+julia> nworkers()
+5
+```
 """
 function nworkers()
     n = nprocs()
@@ -760,7 +784,18 @@ end
 """
     procs()
 
-Return a list of all process identifiers.
+Return a list of all process identifiers, including pid 1 (which is not included by [`workers()`](@ref)).
+
+# Examples
+```julia-repl
+\$ julia -p 5
+
+julia> procs()
+3-element Array{Int64,1}:
+ 1
+ 2
+ 3
+```
 """
 function procs()
     if myid() == 1 || (PGRP.topology == :all_to_all  && !isclusterlazy())
@@ -812,6 +847,16 @@ end
     workers()
 
 Return a list of all worker process identifiers.
+
+# Examples
+```julia-repl
+\$ julia -p 5
+
+julia> workers()
+2-element Array{Int64,1}:
+ 2
+ 3
+```
 """
 function workers()
     allp = procs()
@@ -835,13 +880,29 @@ Remove the specified workers. Note that only process 1 can add or remove
 workers.
 
 Argument `waitfor` specifies how long to wait for the workers to shut down:
-    - If unspecified, `rmprocs` will wait until all requested `pids` are removed.
-    - An `ErrorException` is raised if all workers cannot be terminated before
-      the requested `waitfor` seconds.
-    - With a `waitfor` value of 0, the call returns immediately with the workers
-      scheduled for removal in a different task. The scheduled `Task` object is
-      returned. The user should call `wait` on the task before invoking any other
-      parallel calls.
+  - If unspecified, `rmprocs` will wait until all requested `pids` are removed.
+  - An [`ErrorException`](@ref) is raised if all workers cannot be terminated before
+    the requested `waitfor` seconds.
+  - With a `waitfor` value of 0, the call returns immediately with the workers
+    scheduled for removal in a different task. The scheduled [`Task`](@ref) object is
+    returned. The user should call [`wait`](@ref) on the task before invoking any other
+    parallel calls.
+
+# Examples
+```julia-repl
+\$ julia -p 5
+
+julia> t = rmprocs(2, 3, waitfor=0)
+Task (runnable) @0x0000000107c718d0
+
+julia> wait(t)
+
+julia> workers()
+3-element Array{Int64,1}:
+ 4
+ 5
+ 6
+```
 """
 function rmprocs(pids...; waitfor=typemax(Int))
     cluster_mgmt_from_master_check()

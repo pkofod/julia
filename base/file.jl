@@ -206,13 +206,13 @@ julia> readdir("test")
 function mkpath(path::AbstractString; mode::Integer = 0o777)
     isdirpath(path) && (path = dirname(path))
     dir = dirname(path)
-    (path == dir || isdir(path)) && return
+    (path == dir || isdir(path)) && return path
     mkpath(dir, mode = checkmode(mode))
     try
         mkdir(path, mode = mode)
-    # If there is a problem with making the directory, but the directory
-    # does in fact exist, then ignore the error. Else re-throw it.
     catch err
+        # If there is a problem with making the directory, but the directory
+        # does in fact exist, then ignore the error. Else re-throw it.
         if !isa(err, SystemError) || !isdir(path)
             rethrow()
         end
@@ -236,7 +236,7 @@ julia> rm("my", recursive=true)
 julia> rm("this_file_does_not_exist", force=true)
 
 julia> rm("this_file_does_not_exist")
-ERROR: unlink: no such file or directory (ENOENT)
+ERROR: IOError: unlink: no such file or directory (ENOENT)
 Stacktrace:
 [...]
 ```
@@ -252,7 +252,7 @@ function rm(path::AbstractString; force::Bool=false, recursive::Bool=false)
             end
             unlink(path)
         catch err
-            if force && isa(err, UVError) && err.code==Base.UV_ENOENT
+            if force && isa(err, IOError) && err.code==Base.UV_ENOENT
                 return
             end
             rethrow()
@@ -297,14 +297,7 @@ function checkfor_mv_cp_cptree(src::AbstractString, dst::AbstractString, txt::Ab
 end
 
 function cptree(src::AbstractString, dst::AbstractString; force::Bool=false,
-                                                          follow_symlinks::Bool=false,
-                                                          remove_destination::Union{Bool,Nothing}=nothing)
-    # TODO: Remove after 0.7
-    if remove_destination !== nothing
-        Base.depwarn("The `remove_destination` keyword argument is deprecated; use " *
-                     "`force` instead", :cptree)
-        force = remove_destination
-    end
+                                                          follow_symlinks::Bool=false)
     isdir(src) || throw(ArgumentError("'$src' is not a directory. Use `cp(src, dst)`"))
     checkfor_mv_cp_cptree(src, dst, "copying"; force=force)
     mkdir(dst)
@@ -324,7 +317,7 @@ end
 """
     cp(src::AbstractString, dst::AbstractString; force::Bool=false, follow_symlinks::Bool=false)
 
-Copy the file, link, or directory from `src` to `dest`.
+Copy the file, link, or directory from `src` to `dst`.
 `force=true` will first remove an existing `dst`.
 
 If `follow_symlinks=false`, and `src` is a symbolic link, `dst` will be created as a
@@ -333,14 +326,7 @@ of the file or directory `src` refers to.
 Return `dst`.
 """
 function cp(src::AbstractString, dst::AbstractString; force::Bool=false,
-                                                      follow_symlinks::Bool=false,
-                                                      remove_destination::Union{Bool,Nothing}=nothing)
-    # TODO: Remove after 0.7
-    if remove_destination !== nothing
-        Base.depwarn("The `remove_destination` keyword argument is deprecated; use " *
-                     "`force` instead", :cp)
-        force = remove_destination
-    end
+                                                      follow_symlinks::Bool=false)
     checkfor_mv_cp_cptree(src, dst, "copying"; force=force)
     if !follow_symlinks && islink(src)
         symlink(readlink(src), dst)
@@ -383,16 +369,11 @@ Stacktrace:
 julia> mv("hello.txt", "goodbye.txt", force=true)
 "goodbye.txt"
 
+julia> rm("goodbye.txt");
+
 ```
 """
-function mv(src::AbstractString, dst::AbstractString; force::Bool=false,
-                                                      remove_destination::Union{Bool,Nothing}=nothing)
-    # TODO: Remove after 0.7
-    if remove_destination !== nothing
-        Base.depwarn("The `remove_destination` keyword argument is deprecated; use " *
-                     "`force` instead", :mv)
-        force = remove_destination
-    end
+function mv(src::AbstractString, dst::AbstractString; force::Bool=false)
     checkfor_mv_cp_cptree(src, dst, "moving"; force=force)
     rename(src, dst)
     dst
@@ -422,8 +403,13 @@ We can see the [`mtime`](@ref) has been modified by `touch`.
 function touch(path::AbstractString)
     f = open(path, JL_O_WRONLY | JL_O_CREAT, 0o0666)
     try
-        t = time()
-        futime(f,t,t)
+        if Sys.isunix()
+            ret = ccall(:futimes, Cint, (Cint, Ptr{Cvoid}), fd(f), C_NULL)
+            systemerror(:futimes, ret != 0, extrainfo=path)
+        else
+            t = time()
+            futime(f,t,t)
+        end
     finally
         close(f)
     end

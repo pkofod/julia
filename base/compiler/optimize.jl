@@ -6,7 +6,6 @@
 
 mutable struct OptimizationState
     linfo::MethodInstance
-    result_vargs::Vector{Any}
     calledges::Vector{Any}
     src::CodeInfo
     mod::Module
@@ -24,7 +23,7 @@ mutable struct OptimizationState
             frame.stmt_edges[1] = s_edges
         end
         src = frame.src
-        return new(frame.linfo, frame.result.vargs,
+        return new(frame.linfo,
                    s_edges::Vector{Any},
                    src, frame.mod, frame.nargs,
                    frame.min_valid, frame.max_valid,
@@ -51,8 +50,7 @@ mutable struct OptimizationState
             inmodule = linfo.def::Module
             nargs = 0
         end
-        result_vargs = Any[] # if you want something more accurate, set it yourself :P
-        return new(linfo, result_vargs,
+        return new(linfo,
                    s_edges::Vector{Any},
                    src, inmodule, nargs,
                    min_world(linfo), max_world(linfo),
@@ -89,7 +87,7 @@ const _PURE_BUILTINS = Any[tuple, svec, ===, typeof, nfields]
 const _PURE_OR_ERROR_BUILTINS = [
     fieldtype, apply_type, isa, UnionAll,
     getfield, arrayref, isdefined, Core.sizeof,
-    Core.kwfunc
+    Core.kwfunc, ifelse, Core._typevar
 ]
 
 const TOP_TUPLE = GlobalRef(Core, :tuple)
@@ -145,9 +143,13 @@ end
 # These affect control flow within the function (so may not be removed
 # if there is no usage within the function), but don't affect the purity
 # of the function as a whole.
-function stmt_affects_purity(stmt)
-    if isa(stmt, GotoIfNot) || isa(stmt, GotoNode) || isa(stmt, ReturnNode)
+function stmt_affects_purity(@nospecialize(stmt), ir)
+    if isa(stmt, GotoNode) || isa(stmt, ReturnNode)
         return false
+    end
+    if isa(stmt, GotoIfNot)
+        t = argextype(stmt.cond, ir, ir.spvals)
+        return !(t ⊑ Bool)
     end
     if isa(stmt, Expr)
         return stmt.head != :simdloop && stmt.head != :enter
@@ -173,7 +175,7 @@ function optimize(opt::OptimizationState, @nospecialize(result))
             proven_pure = true
             for i in 1:length(ir.stmts)
                 stmt = ir.stmts[i]
-                if stmt_affects_purity(stmt) && !stmt_effect_free(stmt, ir.types[i], ir, ir.spvals)
+                if stmt_affects_purity(stmt, ir) && !stmt_effect_free(stmt, ir.types[i], ir, ir.spvals)
                     proven_pure = false
                     break
                 end
@@ -230,15 +232,19 @@ function optimize(opt::OptimizationState, @nospecialize(result))
     if force_noinline
         opt.src.inlineable = false
     elseif isa(def, Method)
-        bonus = 0
-        if result ⊑ Tuple && !isbitstype(widenconst(result))
-            bonus = opt.params.inline_tupleret_bonus
+        if opt.src.inlineable && isdispatchtuple(opt.linfo.specTypes)
+            # obey @inline declaration if a dispatch barrier would not help
+        else
+            bonus = 0
+            if result ⊑ Tuple && !isbitstype(widenconst(result))
+                bonus = opt.params.inline_tupleret_bonus
+            end
+            if opt.src.inlineable
+                # For functions declared @inline, increase the cost threshold 20x
+                bonus += opt.params.inline_cost_threshold*19
+            end
+            opt.src.inlineable = isinlineable(def, opt, bonus)
         end
-        if opt.src.inlineable
-            # For functions declared @inline, increase the cost threshold 20x
-            bonus += opt.params.inline_cost_threshold*19
-        end
-        opt.src.inlineable = isinlineable(def, opt, bonus)
     end
     nothing
 end
@@ -254,23 +260,10 @@ function is_pure_intrinsic_infer(f::IntrinsicFunction)
              f === Intrinsics.cglobal)  # cglobal lookup answer changes at runtime
 end
 
-# whether `f` is pure for optimizations
-function is_pure_intrinsic_optim(f::IntrinsicFunction)
-    return !(f === Intrinsics.pointerref || # this one is volatile
-             f === Intrinsics.pointerset || # this one is never effect-free
-             f === Intrinsics.llvmcall ||   # this one is never effect-free
-             f === Intrinsics.arraylen ||   # this one is volatile
-             f === Intrinsics.checked_sdiv_int ||  # these may throw errors
-             f === Intrinsics.checked_udiv_int ||
-             f === Intrinsics.checked_srem_int ||
-             f === Intrinsics.checked_urem_int ||
-             f === Intrinsics.cglobal)  # cglobal throws an error for symbol-not-found
-end
-
 ## Computing the cost of a function body
 
 # saturating sum (inputs are nonnegative), prevents overflow with typemax(Int) below
-plus_saturate(x, y) = max(x, y, x+y)
+plus_saturate(x::Int, y::Int) = max(x, y, x+y)
 
 # known return type
 isknowntype(@nospecialize T) = (T == Union{}) || isconcretetype(T)
@@ -312,7 +305,7 @@ function statement_cost(ex::Expr, line::Int, src::CodeInfo, spvals::SimpleVector
                 atyp = argextype(ex.args[3], src, spvals, slottypes)
                 return isknowntype(atyp) ? 4 : params.inline_nonleaf_penalty
             end
-            fidx = findfirst(x->x===f, T_FFUNC_KEY)
+            fidx = find_tfunc(f)
             if fidx === nothing
                 # unknown/unhandled builtin or anonymous function
                 # Use the generic cost of a direct function call
@@ -393,32 +386,48 @@ function is_known_call(e::Expr, @nospecialize(func), src, spvals::SimpleVector, 
     return isa(f, Const) && f.val === func
 end
 
-function renumber_ir_elements!(body::Vector{Any}, changemap::Vector{Int}, preprocess::Bool = true)
-    if preprocess
-        for i = 2:length(changemap)
-            changemap[i] += changemap[i - 1]
+function renumber_ir_elements!(body::Vector{Any}, changemap::Vector{Int})
+    return renumber_ir_elements!(body, changemap, changemap)
+end
+
+function renumber_ir_elements!(body::Vector{Any}, ssachangemap::Vector{Int}, labelchangemap::Vector{Int})
+    for i = 2:length(labelchangemap)
+        labelchangemap[i] += labelchangemap[i - 1]
+    end
+    if ssachangemap !== labelchangemap
+        for i = 2:length(ssachangemap)
+            ssachangemap[i] += ssachangemap[i - 1]
         end
     end
-    changemap[end] != 0 || return
+    (labelchangemap[end] != 0 && ssachangemap[end] != 0) || return
     for i = 1:length(body)
         el = body[i]
         if isa(el, GotoNode)
-            body[i] = GotoNode(el.label + changemap[el.label])
+            body[i] = GotoNode(el.label + labelchangemap[el.label])
         elseif isa(el, SSAValue)
-            body[i] = SSAValue(el.id + changemap[el.id])
+            body[i] = SSAValue(el.id + ssachangemap[el.id])
         elseif isa(el, Expr)
             if el.head === :gotoifnot
                 cond = el.args[1]
                 if isa(cond, SSAValue)
-                    el.args[1] = SSAValue(cond.id + changemap[cond.id])
+                    el.args[1] = SSAValue(cond.id + ssachangemap[cond.id])
                 end
                 tgt = el.args[2]::Int
-                el.args[2] = tgt + changemap[tgt]
+                el.args[2] = tgt + labelchangemap[tgt]
             elseif el.head === :enter
                 tgt = el.args[1]::Int
-                el.args[1] = tgt + changemap[tgt]
+                el.args[1] = tgt + labelchangemap[tgt]
             elseif !is_meta_expr_head(el.head)
-                renumber_ir_elements!(el.args, changemap, false)
+                if el.head === :(=) && el.args[2] isa Expr && !is_meta_expr_head(el.args[2].head)
+                    el = el.args[2]::Expr
+                end
+                args = el.args
+                for i = 1:length(args)
+                    el = args[i]
+                    if isa(el, SSAValue)
+                        args[i] = SSAValue(el.id + ssachangemap[el.id])
+                    end
+                end
             end
         end
     end

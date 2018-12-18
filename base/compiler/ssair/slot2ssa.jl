@@ -44,7 +44,7 @@ function lift_defuse(cfg::CFG, defuse)
 end
 
 @inline slot_id(s) = isa(s, SlotNumber) ? (s::SlotNumber).id : (s::TypedSlot).id
-function scan_slot_def_use(nargs, ci::CodeInfo, code)
+function scan_slot_def_use(nargs::Int, ci::CodeInfo, code::Vector{Any})
     nslots = length(ci.slotnames)
     result = SlotInfo[SlotInfo() for i = 1:nslots]
     # Set defs for arguments
@@ -363,11 +363,7 @@ function rename_phinode_edges(node, bb, result_order, bb_rename)
             resize!(new_values, length(new_values)+1)
         end
     end
-    if length(new_edges) == 1
-        return isassigned(new_values, 1) ? new_values[1] : PhiNode(Any[], Any[])
-    else
-        return PhiNode(new_edges, new_values)
-    end
+    return PhiNode(new_edges, new_values)
 end
 
 """
@@ -387,7 +383,7 @@ function domsort_ssa!(ir::IRCode, domtree::DomTree)
     while node !== -1
         push!(result_order, node)
         cs = domtree.nodes[node].children
-        terminator = ir.stmts[ir.cfg.blocks[node].stmts.last]
+        terminator = ir.stmts[last(ir.cfg.blocks[node].stmts)]
         iscondbr = isa(terminator, GotoIfNot)
         let old_node = node + 1
             if length(cs) >= 1
@@ -725,8 +721,8 @@ function construct_ssa!(ci::CodeInfo, code::Vector{Any}, ir::IRCode, domtree::Do
                 unode = ivalundef ? UpsilonNode() : UpsilonNode(incoming_vals[slot_id(slot)])
                 typ = ivalundef ? MaybeUndef(Union{}) : slottypes[slot_id(slot)]
                 push!(node.values,
-                    NewSSAValue(insert_node!(ir, first_insert_for_bb(code, cfg, item)+1,
-                                 typ, unode).id - length(ir.stmts)))
+                    NewSSAValue(insert_node!(ir, first_insert_for_bb(code, cfg, item),
+                                 typ, unode, true).id - length(ir.stmts)))
             end
         end
         push!(visited, item)
@@ -806,6 +802,7 @@ function construct_ssa!(ci::CodeInfo, code::Vector{Any}, ir::IRCode, domtree::Do
             end
         elseif isexpr(stmt, :enter)
             new_code[idx] = Expr(:enter, block_for_inst(cfg, stmt.args[1]))
+            ssavalmap[idx] = SSAValue(idx) # Slot to store token for pop_exception
         elseif isexpr(stmt, :leave) || isexpr(stmt, :(=)) || isexpr(stmt, :return) ||
             isexpr(stmt, :meta) || isa(stmt, NewvarNode)
             new_code[idx] = stmt
